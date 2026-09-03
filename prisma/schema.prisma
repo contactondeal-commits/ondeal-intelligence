@@ -1,0 +1,426 @@
+// ============================================================================
+// OnDeal Intelligence — schéma de données
+// Hiérarchie multi-tenant stricte : User → Organization → Store → Données.
+// Toute requête applicative doit filtrer par storeId (voir src/lib/db.ts et
+// src/lib/auth.ts::requireStoreAccess). Aucune donnée n'est partagée entre
+// organisations.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // SQLite en développement (zero-config). En production, définir
+  // DATABASE_URL vers PostgreSQL et changer provider = "postgresql"
+  // (voir docs/DEPLOYMENT.md — schéma 100% compatible, aucun type SQLite-only utilisé).
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// IDENTITÉ & SAAS
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships Membership[]
+  auditLogs   AuditLog[]
+
+  @@map("users")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  plan      Plan     @default(STARTER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  stores      Store[]
+
+  @@map("organizations")
+}
+
+enum Plan {
+  STARTER
+  PRO
+  BUSINESS
+  AGENCY
+}
+
+// Table de plans : limites par plan (nombre de boutiques, de produits
+// synchronisés, d'utilisateurs). Consultée par src/lib/plan-limits.ts.
+// Le paiement n'est pas implémenté dans cette V1 (voir SAAS.md) mais les
+// limites sont déjà appliquées pour que l'ajout d'un fournisseur de
+// paiement n'exige pas de refonte du modèle.
+model PlanLimit {
+  plan        Plan @id
+  maxStores   Int
+  maxProducts Int
+  maxUsers    Int
+
+  @@map("plan_limits")
+}
+
+model Membership {
+  id             String   @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role     @default(VIEWER)
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+  @@map("memberships")
+}
+
+// ---------------------------------------------------------------------------
+// BOUTIQUE & INTÉGRATIONS
+// ---------------------------------------------------------------------------
+
+model Store {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  domain         String? // ex: my-store.myshopify.com
+  isDemo         Boolean  @default(false) // Mode Démo — jamais mélangé aux vraies données
+  currency       String   @default("EUR")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrations     Integration[]
+  products         Product[]
+  reviews          Review[]
+  testReviews      TestReview[]
+  scoreSnapshots   ScoreSnapshot[]
+  recommendations  Recommendation[]
+  actions          ActionItem[]
+  auditLogs        AuditLog[]
+  syncRuns         SyncRun[]
+  costAssumptions  CostAssumption[]
+
+  @@index([organizationId])
+  @@map("stores")
+}
+
+enum IntegrationProvider {
+  SHOPIFY
+  JUDGEME
+}
+
+enum IntegrationStatus {
+  NOT_CONNECTED
+  CONNECTED
+  ERROR
+}
+
+// Les identifiants sont chiffrés (AES-256-GCM, voir src/lib/crypto.ts) avant
+// stockage — jamais en clair, jamais dans les logs. Aucune valeur par défaut
+// fictive n'est écrite ici : tant qu'un connecteur n'a pas d'enregistrement
+// CONNECTED, l'application affiche "Non connecté".
+model Integration {
+  id                 String              @id @default(cuid())
+  storeId            String
+  provider           IntegrationProvider
+  status             IntegrationStatus   @default(NOT_CONNECTED)
+  encryptedCredentials String?           // JSON chiffré { domain, token, ... }
+  lastSyncedAt       DateTime?
+  lastError          String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, provider])
+  @@index([storeId])
+  @@map("integrations")
+}
+
+model SyncRun {
+  id          String    @id @default(cuid())
+  storeId     String
+  provider    IntegrationProvider
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  status      String    // "running" | "success" | "partial" | "error"
+  itemsFetched Int      @default(0)
+  itemsStored  Int      @default(0)
+  errorCount   Int      @default(0)
+  errorSample  String?  // JSON, échantillon d'erreurs pour diagnostic
+  triggeredBy  String   // "manual" | "scheduled"
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, provider])
+  @@map("sync_runs")
+}
+
+// ---------------------------------------------------------------------------
+// CATALOGUE
+// ---------------------------------------------------------------------------
+
+model Product {
+  id                String   @id @default(cuid())
+  storeId           String
+  shopifyProductId  String   // GID Shopify d'origine
+  handle            String
+  title             String
+  status            String   // active | draft | archived (statut Shopify réel)
+  productType       String?
+  vendor            String?
+  imageUrl          String?
+  createdAtShopify  DateTime?
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+
+  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  variants Variant[]
+  reviews  Review[]
+  scoreSnapshots ScoreSnapshot[]
+  recommendations Recommendation[]
+  costAssumption CostAssumption?
+  salesSnapshots SalesSnapshot[]
+
+  @@unique([storeId, shopifyProductId])
+  @@index([storeId])
+  @@index([storeId, status])
+  @@map("products")
+}
+
+model Variant {
+  id                String   @id @default(cuid())
+  productId         String
+  shopifyVariantId  String
+  title             String
+  sku               String?
+  price             Float?   // prix de vente actuel (devise du store), null si non défini
+  compareAtPrice    Float?
+  inventoryQuantity Int?     // stock boutique, null = donnée non disponible
+  supplierStock     Int?     // stock fournisseur si connu (ex. CJ/DSers), null sinon
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, shopifyVariantId])
+  @@index([productId])
+  @@map("variants")
+}
+
+// Vitesse de vente : agrégat quotidien minimal permettant de calculer les
+// "jours de stock estimés" sans avoir besoin de l'historique complet des
+// commandes. Alimenté par la synchronisation (Phase 15/16) à partir des
+// commandes Shopify réelles ; jamais interpolé.
+model SalesSnapshot {
+  id          String   @id @default(cuid())
+  productId   String
+  date        DateTime
+  unitsSold   Int
+  revenue     Float
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, date])
+  @@index([productId, date])
+  @@map("sales_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// AVIS — séparation stricte Review Intelligence (réel) / Test Mode (fictif)
+// ---------------------------------------------------------------------------
+
+model Review {
+  id               String   @id @default(cuid())
+  storeId          String
+  productId        String?
+  externalId       String   // id Judge.me
+  rating           Int
+  title            String?
+  body             String?
+  authorName       String?
+  verifiedPurchase Boolean  @default(false)
+  publishedAt      DateTime
+  fetchedAt        DateTime @default(now())
+
+  store   Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([storeId, externalId])
+  @@index([storeId])
+  @@index([productId])
+  @@map("reviews")
+}
+
+// Données 100% fictives — Mode Test uniquement. Jamais lues par Review
+// Intelligence, jamais exportées vers une intégration réelle.
+model TestReview {
+  id        String   @id @default(cuid())
+  storeId   String
+  handle    String
+  rating    Int
+  title     String
+  body      String
+  author    String
+  email     String
+  createdAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@map("test_reviews")
+}
+
+// ---------------------------------------------------------------------------
+// COÛTS / MARGE
+// ---------------------------------------------------------------------------
+
+// Une ligne par produit. Chaque champ null = hypothèse non renseignée,
+// jamais inventée : le module Marge affiche alors "Non disponible" pour les
+// calculs qui en dépendent, et liste précisément l'hypothèse manquante.
+model CostAssumption {
+  id                String   @id @default(cuid())
+  storeId           String
+  productId         String   @unique
+  supplierCost      Float?
+  shippingCost      Float?
+  paymentFeesRate   Float?   // ex. 0.029 pour 2.9%
+  otherFixedCost    Float?
+  updatedAt         DateTime @updatedAt
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@map("cost_assumptions")
+}
+
+// ---------------------------------------------------------------------------
+// SCORING
+// ---------------------------------------------------------------------------
+
+model ScoreSnapshot {
+  id         String   @id @default(cuid())
+  storeId    String
+  productId  String
+  score      Int      // 0-100
+  factorsJson String  // JSON: détail explicable des facteurs (voir types/index.ts ScoreBreakdown)
+  computedAt DateTime @default(now())
+
+  store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, productId, computedAt])
+  @@map("score_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// RECOMMANDATIONS / ACTIONS / HISTORIQUE
+// ---------------------------------------------------------------------------
+
+enum RecommendationSeverity {
+  URGENT
+  OPPORTUNITY
+  SUGGESTION
+}
+
+enum RecommendationStatus {
+  OPEN
+  DISMISSED
+  ACTIONED
+}
+
+model Recommendation {
+  id           String                 @id @default(cuid())
+  storeId      String
+  productId    String?
+  category     String                 // "stock" | "margin" | "reviews" | "marketing" | "data_quality" | ...
+  severity     RecommendationSeverity
+  title        String
+  reason       String                 // "Pourquoi ?"
+  impact       String                 // "Impact potentiel ?"
+  confidence   Int                    // 0-100, "Niveau de confiance ?"
+  actionLabel  String?                // "Action proposée ?" (null si aucune action exécutable)
+  actionType   String?                // clé technique utilisée par le moteur d'actions
+  actionPayloadJson String?
+  status       RecommendationStatus   @default(OPEN)
+  createdAt    DateTime               @default(now())
+
+  store   Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  actionItems ActionItem[]
+
+  @@index([storeId, status])
+  @@index([storeId, severity])
+  @@map("recommendations")
+}
+
+enum ActionSensitivity {
+  SENSITIVE // prix, stock, publication, suppression, campagnes → validation humaine obligatoire
+  SAFE
+}
+
+enum ActionStatus {
+  PENDING_VALIDATION
+  CONFIRMED
+  EXECUTED
+  FAILED
+  CANCELLED
+}
+
+model ActionItem {
+  id               String            @id @default(cuid())
+  storeId          String
+  recommendationId String?
+  type             String            // "update_price" | "update_stock" | "publish" | ...
+  sensitivity      ActionSensitivity
+  status           ActionStatus      @default(PENDING_VALIDATION)
+  payloadJson      String            // détail de l'action proposée
+  resultJson       String?           // résultat après exécution (ou erreur)
+  createdAt        DateTime          @default(now())
+  confirmedAt      DateTime?
+  executedAt       DateTime?
+  createdByUserId  String?
+
+  store          Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  recommendation Recommendation? @relation(fields: [recommendationId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, status])
+  @@map("action_items")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  storeId   String
+  userId    String?
+  actorType String   // "user" | "system"
+  event     String   // ex. "sync.completed", "recommendation.created", "action.confirmed"
+  message   String
+  metaJson  String?
+  createdAt DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@map("audit_logs")
+}
