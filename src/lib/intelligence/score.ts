@@ -157,3 +157,54 @@ export function classifyProduct(params: {
   if (params.score >= 30) return "a_surveiller";
   return "a_revoir";
 }
+
+export interface AggregatedFactor {
+  key: string;
+  label: string;
+  /** Contribution moyenne réelle (points sur 100) parmi les produits où ce facteur était disponible */
+  avgContribution: number;
+  /** % de produits pour lesquels ce facteur était disponible */
+  availabilityRate: number;
+}
+
+/**
+ * Agrège les ScoreBreakdown réels de plusieurs produits pour expliquer le
+ * "ONDEAL HEALTH" au niveau boutique — aucune valeur inventée : on moyenne
+ * uniquement les contributions réellement calculées par computeScore().
+ * Retourne un tableau vide si aucun breakdown n'est fourni (jamais de
+ * placeholder fictif).
+ */
+export function aggregateScoreBreakdowns(breakdowns: ScoreBreakdown[]): AggregatedFactor[] {
+  if (breakdowns.length === 0) return [];
+
+  const byKey = new Map<string, { label: string; contributions: number[]; availableCount: number }>();
+  for (const b of breakdowns) {
+    for (const f of b.factors) {
+      let entry = byKey.get(f.key);
+      if (!entry) {
+        entry = { label: f.label, contributions: [], availableCount: 0 };
+        byKey.set(f.key, entry);
+      }
+      if (f.available) {
+        entry.contributions.push(f.contribution);
+        entry.availableCount += 1;
+      }
+    }
+  }
+
+  const result: AggregatedFactor[] = [];
+  for (const [key, entry] of byKey) {
+    const avgContribution =
+      entry.contributions.length > 0
+        ? entry.contributions.reduce((a, b) => a + b, 0) / entry.contributions.length
+        : 0;
+    result.push({
+      key,
+      label: entry.label,
+      avgContribution: Math.round(avgContribution * 10) / 10,
+      availabilityRate: Math.round((entry.availableCount / breakdowns.length) * 100),
+    });
+  }
+
+  return result.sort((a, b) => b.avgContribution - a.avgContribution);
+}

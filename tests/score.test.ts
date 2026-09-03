@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeScore, classifyProduct } from "@/lib/intelligence/score";
+import { computeScore, classifyProduct, aggregateScoreBreakdowns } from "@/lib/intelligence/score";
 
 describe("computeScore", () => {
   it("retourne 0 et une complétude de 0% si toutes les données manquent", () => {
@@ -40,5 +40,31 @@ describe("classifyProduct", () => {
   it("classe 'à booster' un très bon score avec tendance de ventes positive", () => {
     const tier = classifyProduct({ score: 85, hasStockCritical: false, hasNegativeMargin: false, salesTrendPositive: true });
     expect(tier).toBe("a_booster");
+  });
+});
+
+describe("aggregateScoreBreakdowns", () => {
+  it("retourne un tableau vide sans aucune donnée inventée si aucun breakdown fourni", () => {
+    expect(aggregateScoreBreakdowns([])).toEqual([]);
+  });
+
+  it("moyenne uniquement les contributions réellement disponibles, jamais les indisponibles comme 0", () => {
+    const b1 = computeScore({ salesTrend: 100, marginRate: 0.5, stockHealth: 100, averageRating: 5, reviewCount: 50, contentQuality: 100 });
+    const b2 = computeScore({ salesTrend: null, marginRate: 0.5, stockHealth: 100, averageRating: 5, reviewCount: 50, contentQuality: 100 });
+    const agg = aggregateScoreBreakdowns([b1, b2]);
+    const salesTrendFactor = agg.find((f) => f.key === "sales_trend")!;
+    // Disponible dans 1 produit sur 2 seulement.
+    expect(salesTrendFactor.availabilityRate).toBe(50);
+    // La moyenne ne doit porter que sur le produit où le facteur est disponible (b1), pas diluée par b2.
+    const b1SalesTrend = b1.factors.find((f) => f.key === "sales_trend")!.contribution;
+    expect(salesTrendFactor.avgContribution).toBeCloseTo(b1SalesTrend, 1);
+  });
+
+  it("trie les facteurs par contribution moyenne décroissante", () => {
+    const b = computeScore({ salesTrend: 100, marginRate: 0.5, stockHealth: 100, averageRating: 5, reviewCount: 50, contentQuality: 100 });
+    const agg = aggregateScoreBreakdowns([b]);
+    for (let i = 1; i < agg.length; i++) {
+      expect(agg[i - 1]!.avgContribution).toBeGreaterThanOrEqual(agg[i]!.avgContribution);
+    }
   });
 });

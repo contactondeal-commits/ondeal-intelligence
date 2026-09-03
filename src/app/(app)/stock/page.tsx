@@ -44,11 +44,34 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
 
   const critical = analyses.filter((a) => a.status === "rupture" || a.status === "rupture_imminente" || a.supplierMismatch);
   const rest = analyses.filter((a) => !critical.includes(a));
+  const REST_PREVIEW = 25;
+  const restPreview = rest.slice(0, REST_PREVIEW);
+  const availableFromSupplier = critical.filter((a) => a.supplierStock !== null && a.supplierStock > 0).length;
 
   return (
     <AppShell store={store} active="/stock">
-      <h1 className="page-title">Stock Intelligence</h1>
-      <p className="page-subtitle" style={{ marginBottom: 18 }}>Jours de stock estimés = stock actuel ÷ vitesse moyenne de vente (30 derniers jours).</p>
+      <div className="hero-health">
+        <div className="hero-health-body">
+          <h1 className="hero-health-greeting">Stock Intelligence</h1>
+          <p className="hero-health-subtitle">
+            Jours de stock estimés = stock actuel ÷ vitesse moyenne de vente (30 derniers jours). Statuts calculés en temps réel, jamais estimés au jugé.
+          </p>
+          <div className="hero-health-stats">
+            <div>
+              <div className="hero-health-stat-label">Situations critiques</div>
+              <div className="hero-health-stat-value">{anyData ? critical.length : "N/D"}</div>
+            </div>
+            <div>
+              <div className="hero-health-stat-label">Réapprovisionnables chez le fournisseur</div>
+              <div className="hero-health-stat-value">{anyData ? availableFromSupplier : "N/D"}</div>
+            </div>
+            <div>
+              <div className="hero-health-stat-label">Variantes suivies</div>
+              <div className="hero-health-stat-value">{analyses.length}</div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="grid grid-4" style={{ marginBottom: 20 }}>
         <MetricCard label="Ruptures" value={anyData ? String(summary.rupture) : null} />
@@ -67,8 +90,13 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
       </div>
 
       <div className="card">
-        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Tous les produits</h2>
-        {rest.length === 0 ? <p className="unavailable-note">Aucune donnée de stock synchronisée.</p> : <StockTable rows={rest} />}
+        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>Tous les produits</h2>
+        {rest.length > REST_PREVIEW && (
+          <p className="unavailable-note" style={{ marginBottom: 12 }}>
+            Affichage des {REST_PREVIEW} premiers sur {rest.length} — filtrez depuis Product Intelligence pour la liste complète.
+          </p>
+        )}
+        {restPreview.length === 0 ? <p className="unavailable-note">Aucune donnée de stock synchronisée.</p> : <StockTable rows={restPreview} />}
       </div>
     </AppShell>
   );

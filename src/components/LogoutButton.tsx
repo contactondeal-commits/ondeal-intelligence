@@ -14,7 +14,8 @@ export default function LogoutButton() {
         router.refresh();
       }}
     >
-      🚪 Déconnexion
+      <span>🚪</span>
+      <span className="sidebar-link-label">Déconnexion</span>
     </button>
   );
 }
