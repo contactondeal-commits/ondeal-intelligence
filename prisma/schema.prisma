@@ -14,7 +14,7 @@ datasource db {
   // SQLite en développement (zero-config). En production, définir
   // DATABASE_URL vers PostgreSQL et changer provider = "postgresql"
   // (voir docs/DEPLOYMENT.md — schéma 100% compatible, aucun type SQLite-only utilisé).
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
