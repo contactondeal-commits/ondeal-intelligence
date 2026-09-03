@@ -45,6 +45,15 @@ export async function requireStore(searchParams: { store?: string }): Promise<Re
   const membership = ctx.memberships.find((m) => m.organizationId === store!.organizationId)!;
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: store!.organizationId } });
 
+  const accessibleStores = allStores.filter(
+    (s) => s.organizationId === store!.organizationId || orgIds.includes(s.organizationId),
+  );
+  // Dès qu'une boutique réelle existe, on masque complètement la boutique de
+  // démonstration du sélecteur : impossible de tomber dessus par erreur
+  // (ex. pendant une démo/live devant un client).
+  const hasRealStore = accessibleStores.some((s) => !s.isDemo);
+  const visibleStores = hasRealStore ? accessibleStores.filter((s) => !s.isDemo) : accessibleStores;
+
   return {
     id: store!.id,
     name: store!.name,
@@ -55,8 +64,6 @@ export async function requireStore(searchParams: { store?: string }): Promise<Re
     plan: org.plan,
     userId: ctx.user.id,
     role: membership.role,
-    allStores: allStores
-      .filter((s) => s.organizationId === store!.organizationId || orgIds.includes(s.organizationId))
-      .map((s) => ({ id: s.id, name: s.name, isDemo: s.isDemo })),
+    allStores: visibleStores.map((s) => ({ id: s.id, name: s.name, isDemo: s.isDemo })),
   };
 }
