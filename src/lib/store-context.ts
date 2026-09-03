@@ -35,8 +35,12 @@ export async function requireStore(searchParams: { store?: string }): Promise<Re
   if (allStores.length === 0) redirect("/onboarding");
 
   const requestedId = searchParams.store;
-  const store = requestedId ? allStores.find((s) => s.id === requestedId) : allStores[0];
-  if (!store) redirect(`/dashboard?store=${allStores[0]!.id}`);
+  // Par défaut (sans ?store= dans l'URL), on privilégie une boutique réelle
+  // plutôt que la boutique de démonstration, même si celle-ci a été créée
+  // en premier (à l'onboarding).
+  const defaultStore = allStores.find((s) => !s.isDemo) ?? allStores[0]!;
+  const store = requestedId ? allStores.find((s) => s.id === requestedId) : defaultStore;
+  if (!store) redirect(`/dashboard?store=${defaultStore.id}`);
 
   const membership = ctx.memberships.find((m) => m.organizationId === store!.organizationId)!;
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: store!.organizationId } });

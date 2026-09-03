@@ -9,9 +9,13 @@ export default async function RootPage() {
   if (ctx.memberships.length === 0) redirect("/onboarding");
 
   const firstOrgId = ctx.memberships[0]!.organizationId;
-  const store = await prisma.store.findFirst({ where: { organizationId: firstOrgId }, orderBy: { createdAt: "asc" } });
+  const stores = await prisma.store.findMany({ where: { organizationId: firstOrgId }, orderBy: { createdAt: "asc" } });
 
-  if (!store) redirect("/onboarding");
+  if (stores.length === 0) redirect("/onboarding");
+
+  // Priorise une boutique réelle sur la boutique de démonstration si les deux
+  // existent, même si la démo a été créée en premier (à l'onboarding).
+  const store = stores.find((s) => !s.isDemo) ?? stores[0]!;
 
   redirect(`/dashboard?store=${store.id}`);
 }
