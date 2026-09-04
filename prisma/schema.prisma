@@ -50,6 +50,18 @@ model Organization {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // FACTURATION SHOPIFY (commercialisation) — null tant qu'aucun abonnement
+  // Shopify Billing n'a été créé. billingProvider distingue une organisation
+  // facturée via Shopify d'une organisation gérée manuellement (compte
+  // interne/pilote), pour ne jamais confondre les deux. Le statut brut
+  // Shopify (ACTIVE/PENDING/CANCELLED/EXPIRED/FROZEN/DECLINED) est conservé
+  // tel quel — Organization.plan n'est mis à jour QUE quand le webhook
+  // app_subscriptions/update confirme un statut ACTIVE.
+  billingProvider              String?   // "shopify" | null
+  shopifySubscriptionId        String?   // GID AppSubscription Shopify
+  shopifySubscriptionStatus    String?   // statut brut renvoyé par Shopify
+  shopifySubscriptionUpdatedAt DateTime?
+
   memberships Membership[]
   stores      Store[]
 
@@ -108,6 +120,11 @@ model Store {
   // CostAssumption produit n'existe. Explicitement étiquetées "estimées".
   defaultShippingCost    Float?
   defaultPaymentFeesRate Float?   // ex. 0.029 pour 2.9%
+  // Scopes Admin API réellement accordés lors de l'installation OAuth
+  // (ex. "read_products,read_inventory,read_orders"), tels que renvoyés par
+  // Shopify — jamais supposés. null = boutique connectée par jeton manuel
+  // (parcours pré-OAuth) ou non connectée.
+  shopifyGrantedScope    String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
