@@ -166,6 +166,7 @@ export async function recomputeStoreIntelligence(storeId: string): Promise<void>
         reason: r.reason,
         impact: r.impact,
         confidence: r.confidence,
+        impactScore: r.impactScore ?? null,
         actionLabel: r.actionLabel,
         actionType: r.actionType,
         actionPayloadJson: r.actionPayload ? JSON.stringify(r.actionPayload) : null,

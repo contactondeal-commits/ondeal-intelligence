@@ -236,3 +236,72 @@ export function isStockSnapshot(value: unknown): value is StockSimulationSnapsho
   const v = value as Record<string, unknown>;
   return v.kind === "stock" && typeof v.productId === "string" && typeof v.variantId === "string";
 }
+
+// ---------------------------------------------------------------------------
+// SNAPSHOT STOCK MULTI-VARIANTE — même garantie que le snapshot stock
+// mono-variante (voir plus haut), étendue à une mission "review_supplier"
+// désormais agrégée par produit (une recommandation pour N variantes en
+// rupture, pas N recommandations identiques — voir recommendations.ts).
+// Chaque variante du groupe garde SA PROPRE preuve capturée (stock,
+// vélocité) : la mission est jugée "obsolète" (à re-simuler) dès qu'AU
+// MOINS UNE des variantes a changé depuis la préparation — jamais une
+// moyenne qui masquerait qu'une seule variante a été réapprovisionnée.
+// ---------------------------------------------------------------------------
+
+export interface MultiStockSimulationSnapshot {
+  kind: "stock_multi";
+  productId: string;
+  variantIds: string[];
+  observedAt: string;
+  variants: Array<{ variantId: string } & StockSnapshotFields>;
+}
+
+export function buildMultiStockSnapshot(input: {
+  productId: string;
+  variantIds: string[];
+  variants: Array<{ variantId: string } & StockSnapshotFields>;
+  observedAt?: Date;
+}): MultiStockSimulationSnapshot {
+  return {
+    kind: "stock_multi",
+    productId: input.productId,
+    variantIds: input.variantIds,
+    observedAt: (input.observedAt ?? new Date()).toISOString(),
+    variants: input.variants,
+  };
+}
+
+export function isMultiStockSnapshot(value: unknown): value is MultiStockSimulationSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return v.kind === "stock_multi" && typeof v.productId === "string" && Array.isArray(v.variantIds) && Array.isArray(v.variants);
+}
+
+/**
+ * Compare chaque variante du snapshot à sa donnée actuelle (fournie par
+ * l'appelant, une par variantId). Une variante absente de `current` (ex.
+ * supprimée depuis) n'est pas comparée — rien à protéger pour elle, comme
+ * pour le cas mono-variante. Le libellé de chaque champ changé est suffixé
+ * par la variante concernée : avec N variantes, un libellé nu serait
+ * ambigu sur celle qui a réellement changé.
+ */
+export function compareMultiStockSnapshot(snapshot: MultiStockSimulationSnapshot, current: Map<string, StockSnapshotFields>): SnapshotComparison {
+  const changedFields: ChangedSnapshotField[] = [];
+  for (const v of snapshot.variants) {
+    const cur = current.get(v.variantId);
+    if (!cur) continue;
+    const comparison = compareStockSnapshot({ currentStock: v.currentStock, dailyVelocity: v.dailyVelocity }, cur);
+    for (const c of comparison.changedFields) {
+      changedFields.push({ ...c, label: `${c.label} (variante ${v.variantId.slice(-6)})` });
+    }
+  }
+  return { stale: changedFields.length > 0, changedFields };
+}
+
+export function describeMultiStockSnapshotChange(comparison: SnapshotComparison): string {
+  if (!comparison.stale) return "";
+  const parts = comparison.changedFields.map(
+    (c) => `${c.label} : ${formatStockFieldValue(c.field, c.expected)} → ${formatStockFieldValue(c.field, c.actual)}`,
+  );
+  return `Les données de stock ont changé pour au moins une variante depuis la préparation de cette mission (${parts.join(" ; ")}). Une nouvelle simulation est nécessaire avant de la marquer comme effectuée.`;
+}

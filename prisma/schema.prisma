@@ -475,6 +475,7 @@ model Recommendation {
   reason       String                 // "Pourquoi ?"
   impact       String                 // "Impact potentiel ?"
   confidence   Int                    // 0-100, "Niveau de confiance ?"
+  impactScore  Float?                 // impact € estimé (ex. vélocité × prix × 7j pour une rupture) — null si non calculable, jamais 0 par défaut
   actionLabel  String?                // "Action proposée ?" (null si aucune action exécutable)
   actionType   String?                // clé technique utilisée par le moteur d'actions
   actionPayloadJson String?

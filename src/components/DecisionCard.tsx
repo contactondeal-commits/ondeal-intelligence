@@ -12,6 +12,7 @@ import { simulatePriceChange, simulateRestock } from "@/lib/intelligence/simulat
 import { isPricePrediction, type PricePrediction } from "@/lib/intelligence/prediction";
 import Badge from "@/components/ui/Badge";
 import Button from "@/components/ui/Button";
+import DataTag from "@/components/ui/DataTag";
 import ActionKindBadge from "@/components/decision/ActionKindBadge";
 import EvidencePanel, { type DataPoint } from "@/components/decision/EvidencePanel";
 import SimulationPanel from "@/components/decision/SimulationPanel";
@@ -39,6 +40,18 @@ type PricePayload = {
   supplierCostSource?: "shopify_unit_cost" | "cost_assumption" | "unavailable";
 };
 type StockPayload = { variantId: string; storeStock: number | null; dailyVelocity: number | null };
+// Mission agrégée par produit (>1 variante en rupture/rupture imminente) —
+// voir recommendations.ts (groupStockByProduct). `storeStock` est la somme
+// des stocks connus des variantes du groupe ; `dailyVelocity` est capturée
+// UNE SEULE FOIS par produit (SalesSnapshot est au niveau produit, pas
+// variante — sommer la même valeur N fois serait un bug), jamais sommée.
+type AggregateStockPayload = {
+  productId: string;
+  variantIds: string[];
+  variantCount: number;
+  storeStock: number | null;
+  dailyVelocity: number | null;
+};
 
 export interface SerializedActionItem {
   id: string;
@@ -130,11 +143,18 @@ export default function DecisionCard({
 
   const actionKind = actionKindFor(representative.actionType);
   const isPriceSim = singleton && representative.actionType === "update_price" && !!payload;
-  const isRestockSim = singleton && representative.actionType === "review_supplier" && !!payload && "dailyVelocity" in (payload ?? {});
+  // "variantId" (singulier) distingue une mission mono-variante (simulation
+  // de réassort possible) d'une mission agrégée par produit (payload
+  // "variantIds" pluriel, voir recommendations.ts) — pour laquelle simuler
+  // "et si je reçois N unités ?" n'a pas de sens univoque (laquelle des N
+  // variantes recevrait le réassort ?).
+  const isRestockSim = singleton && representative.actionType === "review_supplier" && !!payload && "variantId" in (payload ?? {});
+  const isAggregateStock = singleton && representative.actionType === "review_supplier" && !!payload && "variantIds" in (payload ?? {});
   const canSimulate = isPriceSim || isRestockSim;
 
   const pricePayload = isPriceSim ? (payload as unknown as PricePayload) : null;
   const stockPayload = isRestockSim ? (payload as unknown as StockPayload) : null;
+  const aggregateStockPayload = isAggregateStock ? (payload as unknown as AggregateStockPayload) : null;
 
   const [candidatePrice, setCandidatePrice] = useState(() => {
     if (existingAction?.payload && typeof existingAction.payload.newPrice === "number") return String(existingAction.payload.newPrice);
@@ -190,6 +210,17 @@ export default function DecisionCard({
           ? `≈ ${(stockPayload.dailyVelocity * 7).toFixed(1)} ventes / 7 j (moy. 30 j)`
           : "Inconnue — pas d'historique de ventes",
       status: stockPayload.dailyVelocity != null ? "calculated" : "unavailable",
+    });
+  } else if (aggregateStockPayload) {
+    dataPoints.push({ label: "Variantes concernées", value: `${aggregateStockPayload.variantCount}`, status: "real" });
+    dataPoints.push({ label: "Stock cumulé", value: aggregateStockPayload.storeStock != null ? `${aggregateStockPayload.storeStock} unité(s)` : "N/D", status: aggregateStockPayload.storeStock != null ? "real" : "unavailable" });
+    dataPoints.push({
+      label: "Vélocité de vente (produit)",
+      value:
+        aggregateStockPayload.dailyVelocity != null
+          ? `≈ ${(aggregateStockPayload.dailyVelocity * 7).toFixed(1)} ventes / 7 j (moy. 30 j, toutes variantes confondues)`
+          : "Inconnue — pas d'historique de ventes",
+      status: aggregateStockPayload.dailyVelocity != null ? "calculated" : "unavailable",
     });
   }
   dataPoints.push({ label: "Confiance de la règle", value: `${group.confidence}%` });
@@ -320,6 +351,12 @@ export default function DecisionCard({
           </div>
           <h3 className="decision-head-title">{group.title}</h3>
           {group.product && <div className="decision-head-product">Produit : {group.product.title}</div>}
+          {group.impactScore !== null && (
+            <div className="decision-head-product cell-sub">
+              Impact estimé : ~{Math.round(group.impactScore).toLocaleString("fr-FR")} €/semaine{" "}
+              {group.impactCoverage < 1 ? `(sur ${Math.round(group.impactCoverage * items.length)}/${items.length} variantes)` : ""} <DataTag status="estimated" compact />
+            </div>
+          )}
           <div className="decision-head-next">
             <span className="decision-head-next-label">Prochaine action</span>
             <span className="decision-head-next-value">{nextActionLabel}</span>
@@ -431,6 +468,8 @@ export default function DecisionCard({
                           title: item.title,
                           confidence: item.confidence,
                           representative: item,
+                          impactScore: item.impactScore ?? null,
+                          impactCoverage: item.impactScore != null ? 1 : 0,
                         }}
                         storeId={storeId}
                         existingAction={actionsByRecommendation[item.id] ?? null}

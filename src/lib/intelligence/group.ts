@@ -30,6 +30,8 @@ export interface GroupableRecommendation {
   /** Données réelles nécessaires à la Simulation (prix/coûts ou stock/vélocité) — jamais interprété ici, seulement transmis. */
   actionPayloadJson?: string | null;
   product?: { id: string; title: string } | null;
+  /** € estimé/semaine pour CET item (voir recommendations.ts) — null si non calculable. */
+  impactScore?: number | null;
 }
 
 export interface RecommendationGroup {
@@ -47,6 +49,14 @@ export interface RecommendationGroup {
   confidence: number;
   /** Item représentatif pour reason/impact/action (le plus élevé en confiance) */
   representative: GroupableRecommendation;
+  /**
+   * Somme des impactScore CONNUS du groupe — jamais une moyenne, jamais un
+   * item inconnu compté comme 0€. null si aucun item du groupe n'a d'impact
+   * calculable (jamais affiché comme "0€" dans ce cas, voir impactCoverage).
+   */
+  impactScore: number | null;
+  /** Part des items du groupe dont l'impact € a pu être calculé (0–1) — permet de dire "estimé sur N/M variantes" plutôt que de laisser croire à une couverture totale. */
+  impactCoverage: number;
 }
 
 const SEVERITY_ORDER: Record<string, number> = { URGENT: 0, OPPORTUNITY: 1, SUGGESTION: 2 };
@@ -82,6 +92,8 @@ export function groupRecommendations(recs: GroupableRecommendation[]): Recommend
       title = `${count} ${pluralizeIssue(representative.category, count)}`;
     }
 
+    const knownImpacts = items.map((r) => r.impactScore).filter((v): v is number => v !== null && v !== undefined);
+
     result.push({
       key,
       category: representative.category,
@@ -91,12 +103,23 @@ export function groupRecommendations(recs: GroupableRecommendation[]): Recommend
       title,
       confidence: Math.max(...items.map((r) => r.confidence)),
       representative,
+      impactScore: knownImpacts.length > 0 ? knownImpacts.reduce((sum, v) => sum + v, 0) : null,
+      impactCoverage: items.length > 0 ? knownImpacts.length / items.length : 0,
     });
   }
 
+  // Priorité : sévérité, puis impact € connu décroissant (un groupe sans
+  // impact calculable — impactScore null — ne passe jamais devant un groupe
+  // dont l'impact est connu et positif, quelle que soit sa taille), puis
+  // nombre d'items, puis confiance.
   return result.sort((a, b) => {
     const sevDiff = (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9);
     if (sevDiff !== 0) return sevDiff;
+    if (a.impactScore !== b.impactScore) {
+      if (a.impactScore === null) return 1;
+      if (b.impactScore === null) return -1;
+      if (a.impactScore !== b.impactScore) return b.impactScore - a.impactScore;
+    }
     if (b.items.length !== a.items.length) return b.items.length - a.items.length;
     return b.confidence - a.confidence;
   });

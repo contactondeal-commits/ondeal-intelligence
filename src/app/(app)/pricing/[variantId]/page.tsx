@@ -108,6 +108,7 @@ export default async function VariantWorkspacePage({
         reason: recommendation.reason,
         impact: recommendation.impact,
         confidence: recommendation.confidence,
+        impactScore: recommendation.impactScore,
         actionLabel: recommendation.actionLabel,
         actionType: recommendation.actionType,
         actionPayloadJson: recommendation.actionPayloadJson,
@@ -258,6 +259,8 @@ export default async function VariantWorkspacePage({
               title: groupable.title,
               confidence: groupable.confidence,
               representative: groupable,
+              impactScore: groupable.impactScore ?? null,
+              impactCoverage: groupable.impactScore != null ? 1 : 0,
             }}
             storeId={store.id}
             existingAction={serializedAction}

@@ -65,7 +65,20 @@ export function criticalTargetKey(type: string | null | undefined, payload: Reco
     // catégorie "data_quality") peuvent toutes deux cibler la même variante
     // en rupture : c'est exactement le cas qui doit être coalescé.
     const variantId = typeof payload.variantId === "string" ? payload.variantId : null;
-    return variantId ? `review_supplier:variant:${variantId}` : null;
+    if (variantId) return `review_supplier:variant:${variantId}`;
+    // Mission agrégée par produit (voir recommendations.ts) : le payload
+    // porte `variantIds` (pluriel) plutôt qu'un `variantId` unique. La clé
+    // inclut l'ensemble exact des variantes concernées — pas seulement le
+    // produit — pour que deux missions distinctes sur le même produit
+    // (ex. "12 variantes en rupture" et "5 variantes en rupture imminente",
+    // des ensembles de variantes toujours disjoints par construction) ne
+    // soient jamais coalescées à tort en une seule.
+    const variantIds = Array.isArray(payload.variantIds) ? payload.variantIds.filter((v): v is string => typeof v === "string") : null;
+    if (variantIds && variantIds.length > 0) {
+      const productId = typeof payload.productId === "string" ? payload.productId : fallbackProductId;
+      return productId ? `review_supplier:product:${productId}:${[...variantIds].sort().join("|")}` : null;
+    }
+    return null;
   }
   // request_reviews / promote_product / edit_product_data : aucune donnée
   // mutable partagée entre deux recommandations — jamais de conflit à

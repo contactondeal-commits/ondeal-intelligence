@@ -60,4 +60,23 @@ describe("criticalTargetKey — conflit entre deux ActionItems ciblant la même 
     expect(criticalTargetKey("update_price", {}, null)).toBeNull();
     expect(criticalTargetKey("unpublish_product", {}, null)).toBeNull();
   });
+
+  it("review_supplier agrégé (payload variantIds pluriel, 04/09/2026) — même ensemble de variantes produit la même clé, indépendamment de l'ordre", () => {
+    const keyA = criticalTargetKey("review_supplier", { productId: "p1", variantIds: ["v1", "v2", "v3"] }, null);
+    const keyB = criticalTargetKey("review_supplier", { productId: "p1", variantIds: ["v3", "v1", "v2"] }, null);
+    expect(keyA).not.toBeNull();
+    expect(keyA).toBe(keyB);
+  });
+
+  it("review_supplier agrégé — deux ensembles de variantes disjoints du MÊME produit (ex. rupture totale vs rupture imminente) ne conflictent jamais", () => {
+    const keyRupture = criticalTargetKey("review_supplier", { productId: "p1", variantIds: ["v1", "v2"] }, null);
+    const keyImminente = criticalTargetKey("review_supplier", { productId: "p1", variantIds: ["v3", "v4"] }, null);
+    expect(keyRupture).not.toBe(keyImminente);
+  });
+
+  it("review_supplier agrégé — le fallback productId (Recommendation.productId) est utilisé quand le payload ne le porte pas directement", () => {
+    const keyA = criticalTargetKey("review_supplier", { variantIds: ["v1", "v2"] }, "p1");
+    const keyB = criticalTargetKey("review_supplier", { productId: "p1", variantIds: ["v1", "v2"] }, null);
+    expect(keyA).toBe(keyB);
+  });
 });

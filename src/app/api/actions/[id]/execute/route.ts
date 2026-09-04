@@ -8,13 +8,16 @@ import { isPriceStale } from "@/lib/intelligence/decision";
 import {
   comparePriceSnapshot,
   compareStockSnapshot,
+  compareMultiStockSnapshot,
   describeSnapshotChange,
   describeStockSnapshotChange,
+  describeMultiStockSnapshotChange,
   isPriceSnapshot,
   isStockSnapshot,
+  isMultiStockSnapshot,
   type PriceSnapshotFields,
 } from "@/lib/intelligence/snapshot";
-import { fetchCurrentStockFields } from "@/lib/intelligence/stockEvidence";
+import { fetchCurrentStockFields, fetchCurrentStockFieldsMulti } from "@/lib/intelligence/stockEvidence";
 import { resolveCostInputs } from "@/lib/intelligence/costs";
 import { isPricePrediction, measurePriceOutcome } from "@/lib/intelligence/prediction";
 import type { ExecutionOutcome } from "@/lib/intelligence/actionKind";
@@ -239,7 +242,19 @@ async function executeUpdatePrice(storeId: string, payload: Record<string, unkno
  */
 async function executeReviewSupplier(payload: Record<string, unknown>): Promise<ExecutionOutcome> {
   const rawSnapshot = payload.simulationSnapshot;
-  if (isStockSnapshot(rawSnapshot)) {
+  if (isMultiStockSnapshot(rawSnapshot)) {
+    // Mission agrégée par produit — voir recommendations.ts et snapshot.ts.
+    // Obsolète dès qu'AU MOINS UNE des variantes du groupe a changé.
+    const current = await fetchCurrentStockFieldsMulti(rawSnapshot.productId, rawSnapshot.variantIds);
+    if (current.size > 0) {
+      const comparison = compareMultiStockSnapshot(rawSnapshot, current);
+      if (comparison.stale) {
+        throw new StaleSimulationError(describeMultiStockSnapshotChange(comparison), comparison.changedFields);
+      }
+    }
+    // Aucune variante du groupe retrouvée (toutes supprimées depuis) : rien
+    // à comparer — même raisonnement que le cas mono-variante ci-dessous.
+  } else if (isStockSnapshot(rawSnapshot)) {
     const current = await fetchCurrentStockFields(rawSnapshot.productId, rawSnapshot.variantId);
     if (current) {
       const comparison = compareStockSnapshot(rawSnapshot, current);

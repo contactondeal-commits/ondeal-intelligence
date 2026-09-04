@@ -84,6 +84,34 @@ describe("groupRecommendations", () => {
     expect(groups[0]!.representative.title).toBe("Haute confiance");
     expect(groups[0]!.confidence).toBe(95);
   });
+
+  it("impactScore du groupe = somme des impactScore connus, jamais une moyenne ni un item inconnu compté comme 0€", () => {
+    const recs = [
+      rec({ id: "r1", impactScore: 100 }),
+      rec({ id: "r2", impactScore: 50 }),
+      rec({ id: "r3", impactScore: null }),
+    ];
+    const groups = groupRecommendations(recs);
+    expect(groups[0]!.impactScore).toBe(150);
+    expect(groups[0]!.impactCoverage).toBeCloseTo(2 / 3, 5);
+  });
+
+  it("impactScore du groupe reste null (pas 0) quand aucun item n'a d'impact connu", () => {
+    const recs = [rec({ id: "r1", impactScore: null }), rec({ id: "r2", impactScore: undefined })];
+    const groups = groupRecommendations(recs);
+    expect(groups[0]!.impactScore).toBeNull();
+    expect(groups[0]!.impactCoverage).toBe(0);
+  });
+
+  it("priorise, à sévérité égale, le groupe à impact € connu le plus élevé — jamais un groupe à impact inconnu devant un impact connu", () => {
+    const recs = [
+      rec({ id: "r1", product: { id: "p1", title: "Petit impact" }, impactScore: 10 }),
+      rec({ id: "r2", product: { id: "p2", title: "Impact inconnu" }, impactScore: null }),
+      rec({ id: "r3", product: { id: "p3", title: "Gros impact" }, impactScore: 500 }),
+    ];
+    const groups = groupRecommendations(recs);
+    expect(groups.map((g) => g.product?.title)).toEqual(["Gros impact", "Petit impact", "Impact inconnu"]);
+  });
 });
 
 describe("countBySeverity", () => {

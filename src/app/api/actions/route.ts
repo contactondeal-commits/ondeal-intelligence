@@ -4,8 +4,8 @@ import { requireStoreAccess, AuthError } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { SENSITIVE_ACTION_TYPES } from "@/lib/intelligence/actionTypes";
 import { criticalTargetKey } from "@/lib/intelligence/actionKind";
-import { buildStockSnapshot } from "@/lib/intelligence/snapshot";
-import { fetchCurrentStockFields } from "@/lib/intelligence/stockEvidence";
+import { buildStockSnapshot, buildMultiStockSnapshot } from "@/lib/intelligence/snapshot";
+import { fetchCurrentStockFields, fetchCurrentStockFieldsMulti } from "@/lib/intelligence/stockEvidence";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
@@ -36,8 +36,29 @@ export async function POST(req: NextRequest) {
     // antérieur. Même architecture que le snapshot prix (voir snapshot.ts).
     let payloadJson = rec.actionPayloadJson ?? "{}";
     if (rec.actionType === "review_supplier" && rec.productId) {
+      // Mission agrégée par produit (voir recommendations.ts) : payload
+      // porte `variantIds` (pluriel) plutôt qu'un `variantId` unique.
+      // Vérifié en premier — un payload agrégé n'a jamais de `variantId`
+      // singulier, donc pas d'ambiguïté entre les deux branches.
+      const variantIds = Array.isArray(basePayload.variantIds)
+        ? basePayload.variantIds.filter((v): v is string => typeof v === "string")
+        : null;
       const variantId = typeof basePayload.variantId === "string" ? basePayload.variantId : null;
-      if (variantId) {
+      if (variantIds && variantIds.length > 0) {
+        const currentFieldsByVariant = await fetchCurrentStockFieldsMulti(rec.productId, variantIds);
+        if (currentFieldsByVariant.size > 0) {
+          payloadJson = JSON.stringify({
+            ...basePayload,
+            simulationSnapshot: buildMultiStockSnapshot({
+              productId: rec.productId,
+              variantIds,
+              variants: variantIds
+                .filter((vId) => currentFieldsByVariant.has(vId))
+                .map((vId) => ({ variantId: vId, ...currentFieldsByVariant.get(vId)! })),
+            }),
+          });
+        }
+      } else if (variantId) {
         const currentFields = await fetchCurrentStockFields(rec.productId, variantId);
         if (currentFields) {
           payloadJson = JSON.stringify({

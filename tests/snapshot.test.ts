@@ -8,6 +8,10 @@ import {
   compareStockSnapshot,
   describeStockSnapshotChange,
   isStockSnapshot,
+  buildMultiStockSnapshot,
+  compareMultiStockSnapshot,
+  describeMultiStockSnapshotChange,
+  isMultiStockSnapshot,
 } from "@/lib/intelligence/snapshot";
 
 const BASE_FIELDS = {
@@ -149,5 +153,93 @@ describe("compareStockSnapshot — même protection que le prix, appliquée à l
     expect(message).toContain("0 unité");
     expect(message).toContain("5 unité");
     expect(message).toContain("mission");
+  });
+});
+
+describe("buildMultiStockSnapshot / isMultiStockSnapshot — mission agrégée par produit (04/09/2026)", () => {
+  it("construit un snapshot multi-variante exploitable reconnu par le type guard", () => {
+    const snap = buildMultiStockSnapshot({
+      productId: "p1",
+      variantIds: ["v1", "v2"],
+      variants: [
+        { variantId: "v1", currentStock: 0, dailyVelocity: 1.2 },
+        { variantId: "v2", currentStock: 0, dailyVelocity: 1.2 },
+      ],
+    });
+    expect(isMultiStockSnapshot(snap)).toBe(true);
+    expect(snap.variantIds).toEqual(["v1", "v2"]);
+  });
+
+  it("rejette un snapshot stock mono-variante (kind différent) comme snapshot multi-variante, et réciproquement", () => {
+    const single = buildStockSnapshot({ productId: "p1", variantId: "v1", candidateAddedUnits: null, fields: { currentStock: 0, dailyVelocity: 1.2 } });
+    const multi = buildMultiStockSnapshot({ productId: "p1", variantIds: ["v1"], variants: [{ variantId: "v1", currentStock: 0, dailyVelocity: 1.2 }] });
+    expect(isMultiStockSnapshot(single)).toBe(false);
+    expect(isStockSnapshot(multi)).toBe(false);
+  });
+
+  it("aucun écart quand toutes les variantes du groupe sont inchangées (mission autorisée)", () => {
+    const snap = buildMultiStockSnapshot({
+      productId: "p1",
+      variantIds: ["v1", "v2"],
+      variants: [
+        { variantId: "v1", currentStock: 0, dailyVelocity: 1.2 },
+        { variantId: "v2", currentStock: 0, dailyVelocity: 1.2 },
+      ],
+    });
+    const current = new Map([
+      ["v1", { currentStock: 0, dailyVelocity: 1.2 }],
+      ["v2", { currentStock: 0, dailyVelocity: 1.2 }],
+    ]);
+    expect(compareMultiStockSnapshot(snap, current).stale).toBe(false);
+  });
+
+  it("détecte qu'UNE SEULE variante du groupe a changé (ex. réapprovisionnée entre-temps) — la mission entière est marquée obsolète, jamais moyennée", () => {
+    const snap = buildMultiStockSnapshot({
+      productId: "p1",
+      variantIds: ["v1", "v2"],
+      variants: [
+        { variantId: "v1", currentStock: 0, dailyVelocity: 1.2 },
+        { variantId: "v2", currentStock: 0, dailyVelocity: 1.2 },
+      ],
+    });
+    const current = new Map([
+      ["v1", { currentStock: 0, dailyVelocity: 1.2 }],
+      ["v2", { currentStock: 5, dailyVelocity: 1.2 }], // v2 réapprovisionnée
+    ]);
+    const cmp = compareMultiStockSnapshot(snap, current);
+    expect(cmp.stale).toBe(true);
+    expect(cmp.changedFields).toHaveLength(1);
+    expect(cmp.changedFields[0]!.label).toContain("v2".slice(-6));
+  });
+
+  it("ignore une variante absente de `current` (ex. supprimée depuis) plutôt que de la traiter comme un changement", () => {
+    const snap = buildMultiStockSnapshot({
+      productId: "p1",
+      variantIds: ["v1", "v2"],
+      variants: [
+        { variantId: "v1", currentStock: 0, dailyVelocity: 1.2 },
+        { variantId: "v2", currentStock: 0, dailyVelocity: 1.2 },
+      ],
+    });
+    const current = new Map([["v1", { currentStock: 0, dailyVelocity: 1.2 }]]); // v2 absente
+    expect(compareMultiStockSnapshot(snap, current).stale).toBe(false);
+  });
+
+  it("produit un message explicite mentionnant la variante concernée, distinct du message mono-variante", () => {
+    const snap = buildMultiStockSnapshot({
+      productId: "p1",
+      variantIds: ["v1", "v2"],
+      variants: [
+        { variantId: "v1", currentStock: 0, dailyVelocity: 1.2 },
+        { variantId: "v2", currentStock: 0, dailyVelocity: 1.2 },
+      ],
+    });
+    const current = new Map([
+      ["v1", { currentStock: 0, dailyVelocity: 1.2 }],
+      ["v2", { currentStock: 5, dailyVelocity: 1.2 }],
+    ]);
+    const message = describeMultiStockSnapshotChange(compareMultiStockSnapshot(snap, current));
+    expect(message).toContain("au moins une variante");
+    expect(message).toContain("v2".slice(-6));
   });
 });

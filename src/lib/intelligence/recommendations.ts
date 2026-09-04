@@ -17,9 +17,187 @@ export interface GeneratedRecommendation {
   reason: string;
   impact: string;
   confidence: number; // 0-100
+  /** € estimé/semaine (ex. vélocité × prix × 7j). null si non calculable — jamais 0 par défaut. */
+  impactScore?: number | null;
   actionLabel: string | null;
   actionType: string | null;
   actionPayload?: Record<string, unknown>;
+}
+
+/**
+ * Impact € estimé sur 7 jours = vélocité de vente connue × prix de vente
+ * connu × 7. Retourne null (jamais 0) dès qu'une des deux données manque —
+ * un impact "estimé à 0€" serait indiscernable d'un vrai zéro et fausserait
+ * tout tri par impact décroissant.
+ */
+function estimateWeeklyImpact(dailyVelocity: number | null, price: number | null): number | null {
+  if (dailyVelocity === null || price === null) return null;
+  return dailyVelocity * price * 7;
+}
+
+function averageKnownPrice(prices: number[]): number | null {
+  return prices.length > 0 ? prices.reduce((sum, p) => sum + p, 0) / prices.length : null;
+}
+
+interface StockProductGroup {
+  productId: string;
+  variantIds: string[];
+  totalStoreStock: number;
+  // La vélocité de vente est calculée au niveau PRODUIT (SalesSnapshot n'est
+  // PAS ventilé par variante — voir schema.prisma), donc identique pour
+  // toutes les variantes d'un même produit : capturée UNE FOIS, jamais
+  // sommée sur les variantes (une somme multiplierait artificiellement
+  // l'impact par le nombre de variantes du groupe).
+  velocity: number | null;
+  supplierMismatch: boolean;
+  knownPrices: number[];
+  minDaysOfStock: number | null;
+}
+
+function groupStockByProduct(analyses: StockAnalysis[], priceByVariant: Map<string, number | null>): Map<string, StockProductGroup> {
+  const groups = new Map<string, StockProductGroup>();
+  for (const s of analyses) {
+    let g = groups.get(s.productId);
+    if (!g) {
+      g = { productId: s.productId, variantIds: [], totalStoreStock: 0, velocity: null, supplierMismatch: false, knownPrices: [], minDaysOfStock: null };
+      groups.set(s.productId, g);
+    }
+    g.variantIds.push(s.variantId);
+    g.totalStoreStock += s.storeStock ?? 0;
+    if (g.velocity === null) g.velocity = s.dailyVelocity;
+    if (s.supplierMismatch) g.supplierMismatch = true;
+    const price = priceByVariant.get(s.variantId) ?? null;
+    if (price !== null) g.knownPrices.push(price);
+    if (s.daysOfStock !== null) g.minDaysOfStock = g.minDaysOfStock === null ? s.daysOfStock : Math.min(g.minDaysOfStock, s.daysOfStock);
+  }
+  return groups;
+}
+
+/**
+ * Regroupe les variantes en rupture (et, séparément, en rupture imminente)
+ * PAR PRODUIT avant de générer un signal — un même produit à N variantes
+ * en rupture ne doit produire qu'UNE recommandation "Vérifier le
+ * fournisseur", pas N recommandations identiques (voir group.ts, qui ne
+ * faisait que ce regroupement à l'AFFICHAGE ; ici c'est fait à la source,
+ * ce qui rend chaque Recommendation directement actionnable et le taux
+ * d'action mesurable un-à-un avec les décisions réellement prises).
+ *
+ * Un produit à une seule variante en rupture garde le format mono-variante
+ * historique (payload `variantId` singulier) — c'est le cas majoritaire, et
+ * il n'y a aucune ambiguïté à résoudre : la simulation "et si je reçois N
+ * unités ?" reste disponible exactement comme avant. Seuls les groupes de
+ * plusieurs variantes (l'ambiguïté "laquelle recevrait le réassort ?" est
+ * réelle) basculent sur le format agrégé (payload `variantIds` pluriel,
+ * pas de simulation de quantité — voir DecisionCard.tsx).
+ */
+function generateStockRecommendations(
+  stock: StockAnalysis[],
+  priceByVariant: Map<string, number | null>,
+  productTitleById: Map<string, string>,
+): GeneratedRecommendation[] {
+  const recs: GeneratedRecommendation[] = [];
+
+  const ruptureGroups = groupStockByProduct(stock.filter((s) => s.status === "rupture"), priceByVariant);
+  for (const g of ruptureGroups.values()) {
+    const n = g.variantIds.length;
+    const productTitle = productTitleById.get(g.productId) ?? "Produit";
+    // Une rupture dont la vélocité CONNUE est nulle (0 vente réelle sur 30
+    // jours, jamais confondue avec "vélocité inconnue" — null ≠ 0, voir
+    // stock.ts) n'est pas urgente : rien ne se perd tant que personne
+    // n'achète ce produit. Le signal reste réel, seulement reclassé.
+    const isDormant = g.velocity === 0;
+    const price = averageKnownPrice(g.knownPrices);
+    const impactScore = estimateWeeklyImpact(g.velocity, price);
+
+    if (n === 1) {
+      const s = stock.find((x) => x.status === "rupture" && x.productId === g.productId)!;
+      recs.push({
+        productId: s.productId,
+        category: "stock",
+        severity: isDormant ? "SUGGESTION" : "URGENT",
+        title: isDormant ? `Produit inactif en rupture — ${s.title}` : `Rupture de stock — ${s.title}`,
+        reason: isDormant
+          ? `Le stock boutique de "${s.title}" est à 0, mais aucune vente n'a été enregistrée sur les 30 derniers jours — la rupture n'a probablement aucun impact commercial actuel.`
+          : `Le stock boutique de "${s.title}" est à 0.${s.supplierMismatch ? " Le fournisseur dispose pourtant d'un stock disponible." : ""}`,
+        impact: isDormant
+          ? "Aucune perte de vente détectée sur cette variante — à réévaluer si la demande reprend."
+          : "Ventes perdues tant que le produit reste indisponible à l'achat.",
+        confidence: isDormant ? 60 : 95,
+        impactScore,
+        actionLabel: s.supplierMismatch ? "Vérifier le réassort fournisseur" : "Vérifier le fournisseur",
+        actionType: "review_supplier",
+        actionPayload: { variantId: s.variantId, storeStock: s.storeStock, dailyVelocity: s.dailyVelocity },
+      });
+    } else {
+      recs.push({
+        productId: g.productId,
+        category: "stock",
+        severity: isDormant ? "SUGGESTION" : "URGENT",
+        title: isDormant ? `Produit inactif en rupture — ${productTitle} (${n} variantes)` : `Rupture de stock — ${productTitle} (${n} variantes)`,
+        reason: isDormant
+          ? `${n} variantes du produit "${productTitle}" sont en rupture de stock, mais aucune vente n'a été enregistrée sur les 30 derniers jours pour ce produit — la rupture n'a probablement aucun impact commercial actuel.`
+          : `${n} variantes du produit "${productTitle}" sont en rupture de stock (stock à 0).${
+              g.supplierMismatch ? " Le fournisseur dispose pourtant d'un stock disponible pour au moins une variante." : ""
+            }`,
+        impact: isDormant
+          ? "Aucune perte de vente détectée pour ce produit — à réévaluer si la demande reprend."
+          : "Ventes perdues tant que ces variantes restent indisponibles à l'achat.",
+        confidence: isDormant ? 60 : 95,
+        impactScore,
+        actionLabel: g.supplierMismatch ? "Vérifier le réassort fournisseur" : "Vérifier le fournisseur",
+        actionType: "review_supplier",
+        actionPayload: { productId: g.productId, variantIds: g.variantIds, variantCount: n, storeStock: g.totalStoreStock, dailyVelocity: g.velocity },
+      });
+    }
+  }
+
+  const imminenteGroups = groupStockByProduct(stock.filter((s) => s.status === "rupture_imminente"), priceByVariant);
+  for (const g of imminenteGroups.values()) {
+    const n = g.variantIds.length;
+    const productTitle = productTitleById.get(g.productId) ?? "Produit";
+    const price = averageKnownPrice(g.knownPrices);
+    const impactScore = estimateWeeklyImpact(g.velocity, price);
+
+    if (n === 1) {
+      const s = stock.find((x) => x.status === "rupture_imminente" && x.productId === g.productId)!;
+      recs.push({
+        productId: s.productId,
+        category: "stock",
+        severity: "URGENT",
+        title: `Rupture imminente — ${s.title}`,
+        reason: `Il reste environ ${Math.round(s.daysOfStock ?? 0)} jour(s) de stock au rythme de vente actuel.`,
+        impact: "Risque de rupture sous 7 jours si aucun réassort n'est engagé.",
+        confidence: 85,
+        impactScore,
+        actionLabel: "Vérifier le fournisseur",
+        actionType: "review_supplier",
+        // storeStock/dailyVelocity réels transmis pour permettre la simulation
+        // "et si je reçois N unités ?" (Command Center → Simulation) sans
+        // recalcul dupliqué — mêmes valeurs que celles déjà utilisées par
+        // analyzeStock pour ce statut.
+        actionPayload: { variantId: s.variantId, storeStock: s.storeStock, dailyVelocity: s.dailyVelocity },
+      });
+    } else {
+      recs.push({
+        productId: g.productId,
+        category: "stock",
+        severity: "URGENT",
+        title: `Rupture imminente — ${productTitle} (${n} variantes)`,
+        // Le minimum, jamais une moyenne : la variante la plus proche de la
+        // rupture est celle qui doit déclencher l'urgence, pas noyée dans
+        // une moyenne du groupe.
+        reason: `Il reste environ ${Math.round(g.minDaysOfStock ?? 0)} jour(s) de stock pour la variante la plus critique du groupe, au rythme de vente actuel.`,
+        impact: "Risque de rupture sous 7 jours si aucun réassort n'est engagé pour ces variantes.",
+        confidence: 85,
+        impactScore,
+        actionLabel: "Vérifier le fournisseur",
+        actionType: "review_supplier",
+        actionPayload: { productId: g.productId, variantIds: g.variantIds, variantCount: n, storeStock: g.totalStoreStock, dailyVelocity: g.velocity },
+      });
+    }
+  }
+
+  return recs;
 }
 
 export interface RecommendationContext {
@@ -40,42 +218,16 @@ export interface RecommendationContext {
 export function generateRecommendations(ctx: RecommendationContext): GeneratedRecommendation[] {
   const recs: GeneratedRecommendation[] = [];
 
-  // 🔴 URGENT — rupture / rupture imminente
-  for (const s of ctx.stock) {
-    if (s.status === "rupture") {
-      recs.push({
-        productId: s.productId,
-        category: "stock",
-        severity: "URGENT",
-        title: `Rupture de stock — ${s.title}`,
-        reason: `Le stock boutique de "${s.title}" est à 0.${
-          s.supplierMismatch ? " Le fournisseur dispose pourtant d'un stock disponible." : ""
-        }`,
-        impact: "Ventes perdues tant que le produit reste indisponible à l'achat.",
-        confidence: 95,
-        actionLabel: s.supplierMismatch ? "Vérifier le réassort fournisseur" : "Vérifier le fournisseur",
-        actionType: "review_supplier",
-        actionPayload: { variantId: s.variantId, storeStock: s.storeStock, dailyVelocity: s.dailyVelocity },
-      });
-    } else if (s.status === "rupture_imminente") {
-      recs.push({
-        productId: s.productId,
-        category: "stock",
-        severity: "URGENT",
-        title: `Rupture imminente — ${s.title}`,
-        reason: `Il reste environ ${Math.round(s.daysOfStock ?? 0)} jour(s) de stock au rythme de vente actuel.`,
-        impact: "Risque de rupture sous 7 jours si aucun réassort n'est engagé.",
-        confidence: 85,
-        actionLabel: "Vérifier le fournisseur",
-        actionType: "review_supplier",
-        // storeStock/dailyVelocity réels transmis pour permettre la simulation
-        // "et si je reçois N unités ?" (Command Center → Simulation) sans
-        // recalcul dupliqué — mêmes valeurs que celles déjà utilisées par
-        // analyzeStock pour ce statut.
-        actionPayload: { variantId: s.variantId, storeStock: s.storeStock, dailyVelocity: s.dailyVelocity },
-      });
-    }
-  }
+  // Prix de vente réel par variante — déjà calculé par l'analyse de marge,
+  // jamais recalculé ni deviné ici. Sert uniquement à estimer un impact €
+  // pour les signaux de stock (voir estimateWeeklyImpact).
+  const priceByVariant = new Map(ctx.margin.map((m) => [m.variantId, m.sellingPrice]));
+  // Titre du PRODUIT (pas de la variante) — dérivé de ctx.score, une ligne
+  // par produit déjà réelle (voir pipeline.ts), jamais reconstruit en
+  // retirant un suffixe de titre de variante.
+  const productTitleById = new Map(ctx.score.map((s) => [s.productId, s.title]));
+
+  recs.push(...generateStockRecommendations(ctx.stock, priceByVariant, productTitleById));
 
   // 🔴 URGENT — marge négative / 🟠 marge faible
   for (const m of ctx.margin) {
