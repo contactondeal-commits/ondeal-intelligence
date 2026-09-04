@@ -78,9 +78,9 @@ export default function LoginPage() {
           <p className="auth-marketing-lead">
             Votre boutique génère des milliers de signaux chaque jour.
             <br />
-            OnDeal Intelligence les transforme en décisions prioritaires claires —
+            OnDeal Intelligence les transforme en décisions prioritaires claires,
             <br />
-            et vous dit exactement quoi faire, sans jamais agir sans votre confirmation.
+            et vous dit exactement quoi faire — sans jamais agir sans votre confirmation.
           </p>
           <p className="auth-compat">
             <Plug size={13} aria-hidden="true" />
