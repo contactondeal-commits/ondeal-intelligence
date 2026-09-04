@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
@@ -10,10 +9,10 @@ import TableControls from "@/components/ui/TableControls";
 import StoreCostDefaultsForm from "@/components/pricing/StoreCostDefaultsForm";
 import MarginTrendChart from "@/components/pricing/MarginTrendChart";
 import CostAssumptionsBanner from "@/components/pricing/CostAssumptionsBanner";
+import PricingBulkTable from "@/components/pricing/PricingBulkTable";
 import { parsePageParams } from "@/lib/pagination";
 import { queryPricingRows, pricingSummary, type CostFilter, type MarginFilter, type PricingSort } from "@/lib/pricing/query";
 import { MARGIN_THRESHOLDS } from "@/lib/intelligence/margin";
-import { supplierCostSourceLabel } from "@/lib/intelligence/costs";
 
 type Params = { store?: string; q?: string; cost?: string; margin?: string; sort?: string; page?: string; pageSize?: string; days?: string };
 const TREND_WINDOWS = [7, 30, 90];
@@ -41,25 +40,8 @@ const SORT_OPTIONS: Array<{ value: PricingSort; label: string }> = [
   { value: "title", label: "Nom du produit" },
 ];
 
-const PHASE_LABEL: Record<string, string> = {
-  signal: "Signal",
-  confirm: "À valider",
-  "ready-execute": "Prête",
-  "done-success": "Exécutée",
-  "done-failed": "Échec",
-  stale: "Obsolète",
-};
-const PHASE_TONE: Record<string, string> = { signal: "neutral", confirm: "warning", "ready-execute": "info", "done-success": "success", "done-failed": "danger", stale: "danger" };
-
 function pick<T extends string>(value: string | undefined, allowed: T[], fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback;
-}
-
-function eur(v: number | null): string {
-  return v === null ? "—" : `${v.toFixed(2)} €`;
-}
-function pct(v: number | null): string {
-  return v === null ? "—" : `${(v * 100).toFixed(1)} %`;
 }
 
 /**
@@ -157,83 +139,7 @@ export default async function PricingPage({ searchParams }: { searchParams: Prom
           sort={{ key: "sort", label: "Tri", value: sort, options: SORT_OPTIONS }}
         />
 
-        <div className="table-scroll">
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>Produit / variante</th>
-                <th className="num">
-                  Prix <DataTag status="real" compact />
-                </th>
-                <th className="num">Coût</th>
-                <th className="num">
-                  Marge brute <DataTag status="calculated" compact />
-                </th>
-                <th className="num">Marge complète</th>
-                <th>Opportunité</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="unavailable-note" style={{ padding: 24, textAlign: "center" }}>
-                    Aucune variante ne correspond à ces critères.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r) => {
-                const a = r.analysis;
-                const grossTone = a.grossMarginRate === null ? "" : a.grossMarginRate < 0 ? "is-negative" : a.grossMarginRate < MARGIN_THRESHOLDS.faibleRate ? "is-low" : "";
-                return (
-                  <tr key={r.variantId}>
-                    <td>
-                      <div className="cell-title">{r.productTitle}</div>
-                      <div className="cell-sub cell-sub-clip" title={r.sku ? `SKU ${r.sku}` : undefined}>
-                        {r.variantCount > 1 ? `${r.variantTitle} · ` : ""}
-                        stock {r.inventoryQuantity ?? "n/d"}
-                        {r.sku ? ` · SKU ${r.sku}` : ""}
-                      </div>
-                    </td>
-                    <td className="num">{eur(a.sellingPrice)}</td>
-                    <td className="num" title={supplierCostSourceLabel(a.supplierCostSource)}>
-                      {eur(a.supplierCost)} <DataTag status={a.status.supplierCost} compact />
-                    </td>
-                    <td className={`num ${grossTone}`}>
-                      {eur(a.grossMargin)} <span className="cell-sub">({pct(a.grossMarginRate)})</span>
-                    </td>
-                    <td className="num">
-                      {a.margin !== null ? (
-                        <span className={a.margin < 0 ? "is-negative" : ""} title={`Hypothèses : transport ${eur(a.shippingCost)}, frais ${pct(a.paymentFees !== null && a.sellingPrice ? a.paymentFees / a.sellingPrice : null)}`}>
-                          {eur(a.margin)} <span className="cell-sub">({pct(a.marginRate)})</span> <DataTag status="estimated" compact />
-                        </span>
-                      ) : (
-                        <span className="cell-sub" title={a.supplierCost === null ? "Coût fournisseur manquant" : "Transport et/ou frais de paiement non renseignés"}>
-                          <DataTag status="unavailable" compact />
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      {r.signal ? (
-                        <div className="signal-cell">
-                          <span className={`badge ${r.signal.severity === "URGENT" ? "badge-urgent" : r.signal.severity === "OPPORTUNITY" ? "badge-opportunity" : "badge-suggestion"}`}>{r.signal.label}</span>
-                          {r.phase && <span className={`phase-pill phase-pill-${PHASE_TONE[r.phase]}`}>{PHASE_LABEL[r.phase]}</span>}
-                        </div>
-                      ) : (
-                        <span className="cell-sub">Aucun signal</span>
-                      )}
-                    </td>
-                    <td>
-                      <Link className={`btn btn-sm ${r.openRecommendationId ? "btn-primary" : "btn-secondary"}`} href={`/pricing/${r.variantId}?store=${store.id}`}>
-                        {r.openRecommendationId ? (r.phase && r.phase !== "signal" ? "Reprendre" : "Décider") : "Simuler"}
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <PricingBulkTable rows={rows} storeId={store.id} storeIdParam={store.id} marginFilterActive={margin !== "all"} />
         <Pagination total={total} page={page} pageSize={pageSize} params={urlParams} label="variantes" />
       </div>
     </AppShell>
