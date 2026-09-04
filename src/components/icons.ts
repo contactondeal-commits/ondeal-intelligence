@@ -15,6 +15,7 @@ import {
   Settings,
   AlertTriangle,
   TrendingUp,
+  HelpCircle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -32,4 +33,5 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   "/actions": CheckSquare,
   "/audit-log": History,
   "/settings": Settings,
+  "/guide": HelpCircle,
 };

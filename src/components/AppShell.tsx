@@ -39,6 +39,7 @@ const NAV_GROUPS_SOURCE: Array<{ label: string; items: Array<{ key: string; href
   {
     label: "System",
     items: [
+      { key: "/guide", href: "/guide", label: "Guide" },
       { key: "/audit-log", href: "/audit-log", label: "Historique" },
       { key: "/settings", href: "/settings", label: "Paramètres" },
     ],
