@@ -5,8 +5,8 @@ import {
   fetchAllProducts,
   fetchRecentOrders,
   type FetchStats,
-  type ShopifyCredentials,
 } from "@/lib/integrations/shopify";
+import { getFreshShopifyCredentials } from "@/lib/integrations/shopify-token";
 import { fetchAllReviews, type JudgemeCredentials } from "@/lib/integrations/judgeme";
 import type { NormalizeIssue } from "@/lib/validation/normalize";
 import { recomputeStoreIntelligence } from "@/lib/intelligence/pipeline";
@@ -52,7 +52,10 @@ export async function syncShopify(storeId: string, triggeredBy: "manual" | "sche
   const stats: Record<string, unknown> = {};
 
   try {
-    const creds = decryptJson<ShopifyCredentials>(integration.encryptedCredentials);
+    // Rafraîchit un jeton EXPIRANT proche de l'échéance avant de l'utiliser
+    // (04/09/2026 — correctif : voir shopify-token.ts) ; no-op pour un
+    // jeton classique non-expirant, comportement inchangé pour ce cas.
+    const creds = await getFreshShopifyCredentials(integration);
 
     // FETCH produits + variantes (pagination complète)
     const fetchStats: FetchStats = { pages: 0, continuationRequests: 0 };

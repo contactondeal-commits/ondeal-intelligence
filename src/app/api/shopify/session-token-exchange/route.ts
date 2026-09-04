@@ -30,8 +30,11 @@ export async function POST(req: NextRequest) {
   const { shop } = verified;
 
   try {
-    const { accessToken, scope } = await exchangeIdTokenForOfflineAccessToken(shop, idToken);
-    const creds: ShopifyCredentials = { domain: shop, accessToken };
+    const { accessToken, scope, refreshToken, expiresAt } = await exchangeIdTokenForOfflineAccessToken(shop, idToken);
+    // refreshToken/expiresAt propagés (04/09/2026 — correctif) : sans eux,
+    // ce jeton expirant (~1h) meurt silencieusement et ne peut plus jamais
+    // être renouvelé automatiquement (voir shopify-token.ts).
+    const creds: ShopifyCredentials = { domain: shop, accessToken, refreshToken, expiresAt };
     const shopInfo = await fetchShopInfo(creds);
 
     const { storeId, userId, userEmail } = await provisionStoreFromShopifyAuth({

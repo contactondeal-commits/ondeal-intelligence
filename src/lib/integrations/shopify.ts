@@ -6,6 +6,20 @@
 export interface ShopifyCredentials {
   domain: string; // ex: my-store.myshopify.com
   accessToken: string;
+  // Jetons EXPIRANTS uniquement (04/09/2026 — bug de production corrigé le
+  // même jour, voir shopify-token.ts) : absents pour un jeton classique
+  // non-expirant (flux OAuth historique redirect-based, ou jeton saisi
+  // manuellement) — dans ce cas AUCUN rafraîchissement n'est jamais tenté,
+  // comportement strictement inchangé. Présents quand Shopify a émis le
+  // jeton avec `expiring=1` (flux app embarquée / App Bridge) : Shopify
+  // documente une durée de vie de l'access token de seulement 60 minutes
+  // pour ce cas, avec un refresh_token valable 90 jours pour le renouveler
+  // sans jamais redemander d'autorisation au marchand.
+  refreshToken?: string;
+  // Epoch ms — horodatage d'expiration RÉEL retourné par Shopify
+  // (Date.now() + expires_in×1000 au moment de l'échange/renouvellement),
+  // jamais estimé ni deviné.
+  expiresAt?: number;
 }
 
 export class ShopifyApiError extends Error {

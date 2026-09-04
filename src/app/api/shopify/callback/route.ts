@@ -72,8 +72,11 @@ export async function GET(req: NextRequest) {
   try {
     // 3. Échange du code contre un jeton d'accès (une seule fois — Shopify
     // invalide un code déjà utilisé).
-    const { accessToken, scope } = await exchangeCodeForAccessToken(shop, code);
-    const creds: ShopifyCredentials = { domain: shop, accessToken };
+    const { accessToken, scope, refreshToken, expiresAt } = await exchangeCodeForAccessToken(shop, code);
+    // refreshToken/expiresAt propagés défensivement (04/09/2026 — voir
+    // shopify-oauth.ts) : absents la plupart du temps sur ce flux (jeton
+    // classique non-expirant), mais jamais perdus si Shopify les renvoie.
+    const creds: ShopifyCredentials = { domain: shop, accessToken, refreshToken, expiresAt };
 
     if (linkStoreId && linkUserId) {
       // Chemin "compte existant" — aucune session créée/modifiée ici.

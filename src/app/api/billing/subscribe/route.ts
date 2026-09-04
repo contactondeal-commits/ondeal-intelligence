@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requireStoreAccess, requireRole, ADMIN_ROLES, AuthError } from "@/lib/auth";
-import { decryptJson } from "@/lib/crypto";
-import type { ShopifyCredentials } from "@/lib/integrations/shopify";
+import { getFreshShopifyCredentials } from "@/lib/integrations/shopify-token";
 import { createAppSubscription, PLAN_PRICING, type PaidPlan } from "@/lib/integrations/shopify-billing";
 import { logAudit } from "@/lib/audit";
 
@@ -38,7 +37,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const creds = decryptJson<ShopifyCredentials>(integration.encryptedCredentials);
+    // Rafraîchit un jeton EXPIRANT proche de l'échéance avant l'appel à
+    // l'API Billing (04/09/2026 — correctif, voir shopify-token.ts) ; no-op
+    // pour un jeton classique non-expirant.
+    const creds = await getFreshShopifyCredentials(integration);
     const appUrl = process.env.APP_URL?.replace(/\/$/, "") ?? "";
     const returnUrl = `${appUrl}/settings?store=${storeId}&billing=return`;
 

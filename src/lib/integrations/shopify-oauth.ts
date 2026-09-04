@@ -127,6 +127,14 @@ export function verifyShopifyWebhookHmac(rawBody: string, hmacHeader: string | n
 export interface OAuthTokenResult {
   accessToken: string;
   scope: string;
+  // Capturés de façon défensive (04/09/2026) : ce flux ne demande pas
+  // `expiring=1` explicitement, donc Shopify répond normalement par un
+  // jeton non-expirant (ces champs restent alors absents). Mais Shopify
+  // exige un jeton expirant pour toute app publique créée depuis le 1er
+  // avril 2026 — s'il en émet un ici malgré tout, il ne doit JAMAIS être
+  // traité comme non-expirant faute d'avoir capturé sa vraie expiration.
+  refreshToken?: string;
+  expiresAt?: number;
 }
 
 /** Échange le code d'autorisation contre un jeton d'accès (une seule fois, côté serveur). */
@@ -140,9 +148,14 @@ export async function exchangeCodeForAccessToken(shop: string, code: string): Pr
   if (!res.ok) {
     throw new ShopifyApiError(`Échange du code OAuth refusé par Shopify (${res.status}).`, res.status);
   }
-  const json = (await res.json()) as { access_token?: string; scope?: string };
+  const json = (await res.json()) as { access_token?: string; scope?: string; expires_in?: number; refresh_token?: string };
   if (!json.access_token) throw new ShopifyApiError("Réponse OAuth Shopify sans access_token.");
-  return { accessToken: json.access_token, scope: json.scope ?? "" };
+  return {
+    accessToken: json.access_token,
+    scope: json.scope ?? "",
+    refreshToken: json.refresh_token,
+    expiresAt: json.expires_in ? Date.now() + json.expires_in * 1000 : undefined,
+  };
 }
 
 export interface ShopInfo {

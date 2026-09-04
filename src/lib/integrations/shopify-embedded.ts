@@ -64,6 +64,33 @@ export async function verifyIdToken(idToken: string): Promise<VerifiedIdToken | 
 export interface EmbeddedTokenExchangeResult {
   accessToken: string;
   scope: string;
+  // Présents uniquement quand Shopify émet un jeton EXPIRANT (`expiring=1`,
+  // requis pour une app embarquée récente — voir shopify.dev, "About
+  // offline access tokens") : access token valable ~60 minutes, refresh
+  // token valable 90 jours. Absents (jamais inventés) si Shopify répond
+  // sans ces champs — le jeton est alors traité comme non-expirant.
+  refreshToken?: string;
+  expiresAt?: number;
+}
+
+interface RawTokenResponse {
+  access_token?: string;
+  scope?: string;
+  expires_in?: number;
+  refresh_token?: string;
+}
+
+function toExchangeResult(json: RawTokenResponse, context: string): EmbeddedTokenExchangeResult {
+  if (!json.access_token) throw new ShopifyApiError(`Réponse Shopify sans access_token (${context}).`);
+  return {
+    accessToken: json.access_token,
+    scope: json.scope ?? "",
+    refreshToken: json.refresh_token,
+    // expires_in est en secondes depuis l'émission — converti en horodatage
+    // absolu RÉEL (jamais une durée relative stockée telle quelle, qui
+    // dériverait par rapport au moment effectif de la requête).
+    expiresAt: json.expires_in ? Date.now() + json.expires_in * 1000 : undefined,
+  };
 }
 
 /**
@@ -87,14 +114,50 @@ export async function exchangeIdTokenForOfflineAccessToken(
       subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
       requested_token_type: "urn:shopify:params:oauth:token-type:offline-access-token",
       // N'a d'effet que pour un jeton offline nouvellement émis — requis par
-      // Shopify pour les nouvelles installations.
+      // Shopify pour les nouvelles installations. Conséquence assumée
+      // (04/09/2026) : le jeton retourné n'est valable qu'~1h — voir
+      // refreshOfflineAccessToken ci-dessous pour le renouvellement.
       expiring: "1",
     }),
   });
   if (!res.ok) {
     throw new ShopifyApiError(`Échange de jeton de session refusé par Shopify (${res.status}).`, res.status);
   }
-  const json = (await res.json()) as { access_token?: string; scope?: string };
-  if (!json.access_token) throw new ShopifyApiError("Réponse Shopify sans access_token (token exchange).");
-  return { accessToken: json.access_token, scope: json.scope ?? "" };
+  const json = (await res.json()) as RawTokenResponse;
+  return toExchangeResult(json, "token exchange");
+}
+
+/**
+ * Renouvelle un jeton d'accès EXPIRANT à partir de son refresh_token
+ * (référence shopify.dev, "About offline access tokens" — grant_type
+ * refresh_token). Chaque renouvellement retourne un NOUVEAU refresh_token
+ * (rotation) qui remplace l'ancien — Shopify documente une fenêtre de 90
+ * jours glissante à partir du dernier renouvellement effectif, jamais
+ * calculée ici, toujours reçue telle quelle de Shopify.
+ */
+export async function refreshOfflineAccessToken(
+  shop: string,
+  refreshToken: string,
+): Promise<EmbeddedTokenExchangeResult> {
+  const { apiKey, apiSecret } = getAppCredentials();
+  const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: apiKey,
+      client_secret: apiSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!res.ok) {
+    // invalid_grant (refresh_token expiré après 90 jours d'inactivité, ou
+    // révoqué — désinstallation, changement de mot de passe marchand) se
+    // manifeste ici par un statut d'erreur — jamais distingué d'une autre
+    // erreur réseau à ce niveau, l'appelant (shopify-token.ts) décide de la
+    // suite (repasser l'Integration en ERROR, demander une reconnexion).
+    throw new ShopifyApiError(`Renouvellement du jeton Shopify refusé (${res.status}).`, res.status);
+  }
+  const json = (await res.json()) as RawTokenResponse;
+  return toExchangeResult(json, "refresh");
 }

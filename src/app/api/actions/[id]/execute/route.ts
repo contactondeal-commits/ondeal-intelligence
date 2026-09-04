@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireStoreAccess, requireRole, WRITE_ROLES, AuthError } from "@/lib/auth";
-import { decryptJson } from "@/lib/crypto";
 import { logAudit } from "@/lib/audit";
 import { updateVariantPrice, updateProductStatus, type ShopifyCredentials } from "@/lib/integrations/shopify";
+import { getFreshShopifyCredentials } from "@/lib/integrations/shopify-token";
 import { isPriceStale } from "@/lib/intelligence/decision";
 import {
   comparePriceSnapshot,
@@ -137,7 +137,10 @@ async function getShopifyCreds(storeId: string): Promise<ShopifyCredentials> {
   if (!integration || integration.status !== "CONNECTED" || !integration.encryptedCredentials) {
     throw new ExecutionError("Shopify n'est pas connecté pour cette boutique — impossible d'exécuter cette action.");
   }
-  return decryptJson<ShopifyCredentials>(integration.encryptedCredentials);
+  // Rafraîchit un jeton EXPIRANT proche de l'échéance avant une mutation
+  // Shopify réelle (04/09/2026 — correctif, voir shopify-token.ts) ; no-op
+  // pour un jeton classique non-expirant.
+  return getFreshShopifyCredentials(integration);
 }
 
 async function executeUpdatePrice(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
