@@ -471,6 +471,94 @@ table.table tbody tr:hover { background: var(--color-surface-alt); }
   position: relative;
 }
 
+/* Page de connexion — panneau marketing + formulaire (04/09/2026) */
+.auth-wrap-split { padding: 40px 20px; }
+.auth-shell {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 400px);
+  gap: var(--space-12);
+  align-items: center;
+  max-width: 1080px;
+  width: 100%;
+}
+.auth-marketing { max-width: 480px; }
+.auth-marketing-kicker {
+  font-size: var(--text-2xs);
+  font-weight: var(--font-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-primary-dark);
+  margin-bottom: var(--space-3);
+}
+.auth-marketing-title {
+  font-size: 30px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: var(--color-text);
+  margin-bottom: var(--space-4);
+}
+.auth-marketing-lead {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-8);
+}
+.auth-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+}
+.auth-feature-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.auth-feature-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-soft);
+  color: var(--color-primary-dark);
+}
+.auth-feature-item strong {
+  display: block;
+  font-size: 14px;
+  color: var(--color-text);
+  margin-bottom: 2px;
+}
+.auth-feature-text {
+  display: block;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.auth-plan-teaser {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-alt);
+}
+.auth-plan-teaser-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+@media (max-width: 860px) {
+  .auth-shell { grid-template-columns: 1fr; gap: var(--space-8); }
+  .auth-marketing { max-width: none; text-align: left; }
+  .auth-marketing-title { font-size: 24px; }
+  .auth-card { max-width: 460px; margin: 0 auto; }
+}
+
 .callout {
   border-radius: var(--radius-md);
   padding: 13px 16px;
