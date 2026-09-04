@@ -63,7 +63,7 @@ export default function AppShell({
         plan={store.plan}
         organizationName={store.organizationName}
         stores={store.allStores}
-        isFeatureEnabled={(feature) => !feature || hasFeature(store.plan, feature)}
+        enabledFeatures={NAV_GROUPS.flatMap(g => g.items).filter(i => !i.feature || hasFeature(store.plan, i.feature)).map(i => i.href)}
       />
       <main className="main">
         <div className="app-header">

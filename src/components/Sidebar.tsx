@@ -24,7 +24,7 @@ export default function Sidebar({
   plan,
   organizationName,
   stores,
-  isFeatureEnabled,
+  enabledFeatures,
 }: {
   groups: NavGroup[];
   active: string;
@@ -33,7 +33,7 @@ export default function Sidebar({
   plan: string;
   organizationName: string;
   stores: Array<{ id: string; name: string; isDemo: boolean }>;
-  isFeatureEnabled: (feature?: string) => boolean;
+  enabledFeatures: string[];
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set());
@@ -81,7 +81,7 @@ export default function Sidebar({
             )}
             <div className={`sidebar-group-items ${!collapsed && isClosed ? "is-closed" : ""}`}>
               {group.items.map((item) => {
-                const enabled = isFeatureEnabled(item.feature);
+                const enabled = !item.feature || enabledFeatures.includes(item.href);
                 return (
                   <Link
                     key={item.href}
