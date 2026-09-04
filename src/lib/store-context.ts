@@ -14,6 +14,13 @@ export interface ResolvedStore {
   userId: string;
   role: Role;
   allStores: Array<{ id: string; name: string; isDemo: boolean }>;
+  // Statut réel des connecteurs — jamais déduit ni simulé, lu directement de
+  // la table Integration. Alimente le badge de statut dans l'en-tête.
+  integrations: {
+    shopifyConnected: boolean;
+    judgemeConnected: boolean;
+    lastSyncedAt: Date | null;
+  };
 }
 
 /**
@@ -44,6 +51,12 @@ export async function requireStore(searchParams: { store?: string }): Promise<Re
 
   const membership = ctx.memberships.find((m) => m.organizationId === store!.organizationId)!;
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: store!.organizationId } });
+  const integrationRows = await prisma.integration.findMany({ where: { storeId: store!.id } });
+  const shopifyIntegration = integrationRows.find((i) => i.provider === "SHOPIFY");
+  const judgemeIntegration = integrationRows.find((i) => i.provider === "JUDGEME");
+  const lastSyncedAt = [shopifyIntegration?.lastSyncedAt, judgemeIntegration?.lastSyncedAt]
+    .filter((d): d is Date => d != null)
+    .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
 
   const accessibleStores = allStores.filter(
     (s) => s.organizationId === store!.organizationId || orgIds.includes(s.organizationId),
@@ -65,5 +78,10 @@ export async function requireStore(searchParams: { store?: string }): Promise<Re
     userId: ctx.user.id,
     role: membership.role,
     allStores: visibleStores.map((s) => ({ id: s.id, name: s.name, isDemo: s.isDemo })),
+    integrations: {
+      shopifyConnected: shopifyIntegration?.status === "CONNECTED",
+      judgemeConnected: judgemeIntegration?.status === "CONNECTED",
+      lastSyncedAt,
+    },
   };
 }

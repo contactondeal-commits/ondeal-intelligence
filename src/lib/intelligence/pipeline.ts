@@ -2,6 +2,8 @@ import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 import { analyzeStock, type StockInput } from "@/lib/intelligence/stock";
 import { analyzeMargin, type MarginInput } from "@/lib/intelligence/margin";
+import { resolveCostInputs } from "@/lib/intelligence/costs";
+import { salesWindowStart, unitsSoldInWindow } from "@/lib/intelligence/salesWindow";
 import { computeScore, type ScoreInputs } from "@/lib/intelligence/score";
 import { analyzeReviews } from "@/lib/intelligence/reviews";
 import { generateRecommendations, type RecommendationContext } from "@/lib/intelligence/recommendations";
@@ -16,13 +18,18 @@ import type { MarginAnalysis, StockAnalysis } from "@/types";
  * modification des hypothèses de coût dans Price & Margin Intelligence).
  */
 export async function recomputeStoreIntelligence(storeId: string): Promise<void> {
+  const storeDefaults = await prisma.store.findUnique({
+    where: { id: storeId },
+    select: { defaultShippingCost: true, defaultPaymentFeesRate: true },
+  });
   const products = await prisma.product.findMany({
     where: { storeId },
     include: {
       variants: true,
       costAssumption: true,
-      salesSnapshots: { orderBy: { date: "desc" }, take: 30 },
+      salesSnapshots: { where: { date: { gte: salesWindowStart() } }, select: { unitsSold: true } },
       reviews: true,
+      _count: { select: { salesSnapshots: true } },
     },
   });
 
@@ -35,8 +42,8 @@ export async function recomputeStoreIntelligence(storeId: string): Promise<void>
   const scoreRows: Array<{ productId: string; title: string; score: number; dataCompleteness: number }> = [];
 
   for (const p of products) {
-    const unitsSoldLast30Days =
-      p.salesSnapshots.length > 0 ? p.salesSnapshots.reduce((sum, s) => sum + s.unitsSold, 0) : null;
+    // 30 derniers jours calendaires (voir salesWindow.ts) — jamais "30 dernières lignes".
+    const unitsSoldLast30Days = unitsSoldInWindow(p.salesSnapshots, p._count.salesSnapshots > 0);
 
     const totalStoreStock = p.variants.reduce(
       (sum, v) => (v.inventoryQuantity !== null ? sum + v.inventoryQuantity : sum),
@@ -55,20 +62,23 @@ export async function recomputeStoreIntelligence(storeId: string): Promise<void>
         sku: v.sku,
         storeStock: v.inventoryQuantity,
         supplierStock: v.supplierStock,
-        unitsSoldLast30Days: p.salesSnapshots.length > 0 ? unitsSoldLast30Days : null,
+        unitsSoldLast30Days,
         lastSyncedAt: v.updatedAt.toISOString(),
       };
       stockAnalyses.push(analyzeStock(input));
 
+      // Coût réel Shopify prioritaire, hypothèses OnDeal en repli — voir costs.ts.
+      const costs = resolveCostInputs(v, p.costAssumption, storeDefaults);
       const marginInput: MarginInput = {
         productId: p.id,
         variantId: v.id,
         title: p.variants.length > 1 ? `${p.title} — ${v.title}` : p.title,
         sellingPrice: v.price,
-        supplierCost: p.costAssumption?.supplierCost ?? null,
-        shippingCost: p.costAssumption?.shippingCost ?? null,
-        paymentFeesRate: p.costAssumption?.paymentFeesRate ?? null,
-        otherFixedCost: p.costAssumption?.otherFixedCost ?? null,
+        supplierCost: costs.supplierCost,
+        supplierCostSource: costs.supplierCostSource,
+        shippingCost: costs.shippingCost,
+        paymentFeesRate: costs.paymentFeesRate,
+        otherFixedCost: costs.otherFixedCost,
       };
       marginAnalyses.push(analyzeMargin(marginInput));
     }

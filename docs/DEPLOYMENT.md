@@ -54,3 +54,13 @@ déploiement de production :
 - Créer le premier compte, connecter la boutique pilote OnDeal.fr (Shopify + Judge.me) depuis
   Paramètres > Intégrations, lancer une synchronisation manuelle.
 - Voir `SECURITY.md` — section "Ce qui reste à durcir" avant une exposition publique à grande échelle.
+
+## Production (état au 04/09/2026)
+
+- **Hébergement** : Vercel, projet `on-deal/ondeal-intelligence`, déploiement automatique à chaque push sur `master` du dépôt `contactondeal-commits/ondeal-intelligence`.
+- **Base de données** : PostgreSQL (Neon via l'intégration Vercel). `prisma/schema.prisma` utilise `provider = "postgresql"` ; le développement local utilise aussi PostgreSQL (`DATABASE_URL` locale) — SQLite n'est plus le provider committé.
+- **Schéma** : à chaque changement de `schema.prisma`, exécuter `npx prisma db push` avec la `DATABASE_URL` de production (`vercel env pull .env.production.local` puis `npx dotenv -e .env.production.local -- npx prisma db push`, ou équivalent). Le build Vercel n'applique pas le schéma (aucune migration automatique) : c'est volontaire, pour ne jamais modifier la base sans opérateur.
+- **Variables d'environnement obligatoires** (Production + Preview) : `DATABASE_URL`, `AUTH_SECRET` (≥ 32 octets aléatoires), `CREDENTIALS_ENCRYPTION_KEY` (32 octets base64). Optionnelle : `ANTHROPIC_API_KEY` (reformulation IA de l'Assistant ; sans elle, mode déterministe). Aucune variable Shopify/Judge.me globale : les jetons sont saisis par boutique dans Paramètres › Intégrations et chiffrés en base (AES-256-GCM).
+- **Synchronisation** : manuelle (bouton « Synchroniser » ou connexion d'une intégration). Aucun cron Vercel n'est configuré.
+- **Limiteur de débit** des routes d'authentification : en mémoire, par instance serverless (voir `src/lib/rate-limit.ts`). Pour une protection stricte multi-instances, ajouter une règle Vercel WAF ou un limiteur partagé.
+- **En-têtes de sécurité** : définis dans `next.config.ts` (CSP, HSTS, X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy).

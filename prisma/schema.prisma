@@ -103,6 +103,11 @@ model Store {
   domain         String? // ex: my-store.myshopify.com
   isDemo         Boolean  @default(false) // Mode Démo — jamais mélangé aux vraies données
   currency       String   @default("EUR")
+  // HYPOTHÈSES boutique (jamais des données Shopify) : transport moyen par
+  // commande et taux de frais de paiement, utilisés en repli quand aucune
+  // CostAssumption produit n'existe. Explicitement étiquetées "estimées".
+  defaultShippingCost    Float?
+  defaultPaymentFeesRate Float?   // ex. 0.029 pour 2.9%
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -118,6 +123,7 @@ model Store {
   auditLogs        AuditLog[]
   syncRuns         SyncRun[]
   costAssumptions  CostAssumption[]
+  orders           Order[]
 
   @@index([organizationId])
   @@map("stores")
@@ -167,7 +173,8 @@ model SyncRun {
   itemsStored  Int      @default(0)
   errorCount   Int      @default(0)
   errorSample  String?  // JSON, échantillon d'erreurs pour diagnostic
-  triggeredBy  String   // "manual" | "scheduled"
+  statsJson    String?  // JSON : comptes détaillés (produits, variantes, unitCost, commandes, lignes, troncatures, durées par étape)
+  triggeredBy  String   // "manual" | "scheduled" | "bulk_import"
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -200,6 +207,7 @@ model Product {
   recommendations Recommendation[]
   costAssumption CostAssumption?
   salesSnapshots SalesSnapshot[]
+  orderLines     OrderLine[]
 
   @@unique([storeId, shopifyProductId])
   @@index([storeId])
@@ -216,21 +224,83 @@ model Variant {
   price             Float?   // prix de vente actuel (devise du store), null si non défini
   compareAtPrice    Float?
   inventoryQuantity Int?     // stock boutique, null = donnée non disponible
-  supplierStock     Int?     // stock fournisseur si connu (ex. CJ/DSers), null sinon
+  supplierStock     Int?     // stock fournisseur si connu (ex. CJ/DSers), null sinon — JAMAIS écrit par la sync Shopify (démo uniquement)
+  // Coût unitaire RÉEL tel que renseigné dans Shopify (inventoryItem.unitCost),
+  // dans la devise indiquée. null = non renseigné côté Shopify. Distinct de
+  // CostAssumption (hypothèses saisies à la main dans OnDeal, par produit) :
+  // la source Shopify est identifiable comme telle, jamais confondue.
+  unitCost          Float?
+  unitCostCurrency  String?
   updatedAt         DateTime @updatedAt
   createdAt         DateTime @default(now())
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderLines OrderLine[]
 
   @@unique([productId, shopifyVariantId])
   @@index([productId])
   @@map("variants")
 }
 
-// Vitesse de vente : agrégat quotidien minimal permettant de calculer les
-// "jours de stock estimés" sans avoir besoin de l'historique complet des
-// commandes. Alimenté par la synchronisation (Phase 15/16) à partir des
-// commandes Shopify réelles ; jamais interpolé.
+// ---------------------------------------------------------------------------
+// COMMANDES — entités réelles conservées (pas seulement agrégées) pour
+// pouvoir distinguer commandes / unités / chiffre d'affaires, exclure les
+// commandes annulées, et rattacher chaque ligne à sa variante. Montants
+// stockés tels que retournés par Shopify (devise de la boutique) — aucun
+// montant "net" n'est dérivé tant que les remboursements ne sont pas
+// intégrés au calcul (voir totalRefunded : conservé, pas soustrait).
+// ---------------------------------------------------------------------------
+
+model Order {
+  id                  String    @id @default(cuid())
+  storeId             String
+  shopifyOrderId      String
+  name                String?   // ex. "#1001"
+  createdAtShopify    DateTime
+  cancelledAt         DateTime?
+  financialStatus     String?   // displayFinancialStatus Shopify (PAID, REFUNDED, PARTIALLY_REFUNDED, ...)
+  currencyCode        String?
+  totalPrice          Float?    // currentTotalPriceSet (après remises, annulations d'articles)
+  totalRefunded       Float?    // totalRefundedSet — conservé pour transparence, jamais déduit silencieusement
+  fetchedAt           DateTime  @default(now())
+
+  store Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  lines OrderLine[]
+
+  @@unique([storeId, shopifyOrderId])
+  @@index([storeId, createdAtShopify])
+  @@map("orders")
+}
+
+model OrderLine {
+  id                  String   @id @default(cuid())
+  orderId             String
+  shopifyLineItemId   String
+  productId           String?  // null si le produit n'existe plus / n'est pas dans le catalogue synchronisé
+  variantId           String?  // null si la variante n'existe plus / n'est pas dans le catalogue synchronisé
+  shopifyProductId    String?
+  shopifyVariantId    String?
+  quantity            Int
+  currentQuantity     Int      // quantité après retraits/remboursements d'articles (Shopify currentQuantity)
+  originalTotal       Float    // originalTotalSet — avant remises
+  discountedTotal     Float    // discountedTotalSet — après remises de ligne et allocation des remises commande
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant Variant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, shopifyLineItemId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("order_lines")
+}
+
+// Vitesse de vente : agrégat quotidien produit × jour DÉRIVÉ des lignes de
+// commande stockées (Order/OrderLine) par sync/shopifyStore.ts
+// (rebuildSalesSnapshots). Sémantique explicite : unitsSold = quantité
+// commandée, revenue = montant de ligne après remises, commandes annulées
+// EXCLUES, remboursements NON déduits (donc pas un chiffre d'affaires net).
+// Jours sans vente : pas de ligne. Jamais interpolé.
 model SalesSnapshot {
   id          String   @id @default(cuid())
   productId   String

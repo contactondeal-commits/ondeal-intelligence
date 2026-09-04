@@ -29,7 +29,7 @@ export default async function ReviewsPage({ searchParams }: { searchParams: Prom
           <h1 className="page-title">Review Intelligence</h1>
           <p className="page-subtitle">Analyse des vrais avis clients (Judge.me). Pour des données fictives de test, voir le Mode Test dédié.</p>
         </div>
-        <Link href={`/reviews/test-mode?store=${store.id}`} className="btn btn-secondary">🧪 Mode Test — Avis fictifs</Link>
+        <Link href={`/reviews/test-mode?store=${store.id}`} className="btn btn-secondary">Mode Test — Avis fictifs</Link>
       </div>
 
       {!connected && (

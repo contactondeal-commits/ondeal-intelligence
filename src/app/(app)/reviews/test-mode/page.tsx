@@ -15,7 +15,7 @@ export default async function TestModePage({ searchParams }: { searchParams: Pro
   return (
     <AppShell store={store} active="/reviews">
       <div className="callout callout-warning">
-        🧪 <strong>MODE TEST — AVIS FICTIFS.</strong> Les avis générés ici sont entièrement fictifs et destinés
+        <strong>MODE TEST — AVIS FICTIFS.</strong> Les avis générés ici sont entièrement fictifs et destinés
         uniquement aux tests techniques (ex. import CSV Judge.me). Ils ne doivent jamais être présentés comme des
         avis clients réels, et ne sont jamais importés automatiquement vers une boutique de production.
       </div>

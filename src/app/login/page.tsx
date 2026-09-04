@@ -39,11 +39,11 @@ export default function LoginPage() {
         <form onSubmit={onSubmit}>
           <div className="field">
             <label>Email</label>
-            <input className="input" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input className="input" name="email" type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
           <div className="field">
             <label>Mot de passe</label>
-            <input className="input" type="password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input className="input" name="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
           </div>
           <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: "100%", marginTop: 8 }}>
             {loading ? "Connexion…" : "Se connecter"}

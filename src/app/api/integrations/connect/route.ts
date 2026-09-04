@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireStoreAccess, AuthError } from "@/lib/auth";
+import { z } from "zod";
+import { requireStoreAccess, requireRole, ADMIN_ROLES, AuthError } from "@/lib/auth";
 import { encryptJson } from "@/lib/crypto";
 import { logAudit } from "@/lib/audit";
 import { verifyShopifyCredentials, type ShopifyCredentials } from "@/lib/integrations/shopify";
@@ -11,14 +12,41 @@ import { syncShopify, syncJudgeme } from "@/lib/sync/pipeline";
 // VÉRIFIÉS en direct auprès du fournisseur avant d'être chiffrés et
 // stockés. Aucun credential n'est jamais inventé ou pré-rempli : l'échec de
 // vérification bloque la connexion avec un message clair.
+// SÉCURITÉ (04/09/2026) — le domaine Shopify est strictement contraint à
+// `*.myshopify.com` : l'app n'effectue jamais de requête sortante vers un
+// hôte arbitraire fourni par un utilisateur (anti-SSRF).
+const MYSHOPIFY_DOMAIN = /^[a-z0-9][a-z0-9-]{0,62}\.myshopify\.com$/i;
+const bodySchema = z
+  .object({
+    storeId: z.string().min(1).max(64),
+    provider: z.enum(["SHOPIFY", "JUDGEME"]),
+    credentials: z
+      .object({
+        domain: z.string().trim().max(253).optional(),
+        accessToken: z.string().trim().max(512).optional(),
+        shopDomain: z.string().trim().max(253).optional(),
+        apiToken: z.string().trim().max(512).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
+function normalizeMyshopifyDomain(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const host = raw.replace(/^https?:\/\//i, "").replace(/\/.*$/, "").toLowerCase();
+  return MYSHOPIFY_DOMAIN.test(host) ? host : null;
+}
+
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
-  const { storeId, provider, credentials } = body ?? {};
-  if (!storeId || !provider || !credentials) return NextResponse.json({ error: "Champs manquants." }, { status: 400 });
+  const parsed = bodySchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "Champs manquants ou invalides." }, { status: 400 });
+  const { storeId, provider, credentials } = parsed.data;
 
   let userId: string;
   try {
-    ({ userId } = await requireStoreAccess(storeId));
+    const access = await requireStoreAccess(storeId);
+    userId = access.userId;
+    requireRole(access.role, ADMIN_ROLES);
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: 403 });
     throw err;
@@ -26,8 +54,10 @@ export async function POST(req: NextRequest) {
 
   try {
     if (provider === "SHOPIFY") {
-      const creds: ShopifyCredentials = { domain: credentials.domain, accessToken: credentials.accessToken };
-      if (!creds.domain || !creds.accessToken) throw new Error("Domaine et jeton d'accès requis.");
+      const domain = normalizeMyshopifyDomain(credentials.domain);
+      if (!domain) throw new Error("Le domaine doit être de la forme ma-boutique.myshopify.com.");
+      if (!credentials.accessToken) throw new Error("Domaine et jeton d'accès requis.");
+      const creds: ShopifyCredentials = { domain, accessToken: credentials.accessToken };
       await verifyShopifyCredentials(creds);
 
       await prisma.integration.upsert({
@@ -36,8 +66,10 @@ export async function POST(req: NextRequest) {
         update: { status: "CONNECTED", encryptedCredentials: encryptJson(creds), lastError: null },
       });
     } else if (provider === "JUDGEME") {
-      const creds: JudgemeCredentials = { shopDomain: credentials.shopDomain, apiToken: credentials.apiToken };
-      if (!creds.shopDomain || !creds.apiToken) throw new Error("Domaine et jeton API requis.");
+      const shopDomain = normalizeMyshopifyDomain(credentials.shopDomain);
+      if (!shopDomain) throw new Error("Le domaine doit être de la forme ma-boutique.myshopify.com.");
+      if (!credentials.apiToken) throw new Error("Domaine et jeton API requis.");
+      const creds: JudgemeCredentials = { shopDomain, apiToken: credentials.apiToken };
       await verifyJudgemeCredentials(creds);
 
       await prisma.integration.upsert({
@@ -45,12 +77,14 @@ export async function POST(req: NextRequest) {
         create: { storeId, provider: "JUDGEME", status: "CONNECTED", encryptedCredentials: encryptJson(creds) },
         update: { status: "CONNECTED", encryptedCredentials: encryptJson(creds), lastError: null },
       });
-    } else {
-      return NextResponse.json({ error: "Fournisseur inconnu." }, { status: 400 });
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: `Échec de vérification des identifiants : ${message}` }, { status: 400 });
+    // Le message détaillé (statut HTTP du fournisseur, erreur de chiffrement)
+    // reste côté serveur ; l'utilisateur reçoit une cause lisible sans détail interne.
+    console.error("[integrations/connect] échec de vérification", { storeId, provider, error: message });
+    const userMessage = /myshopify|requis/.test(message) ? message : "Le fournisseur a refusé ces identifiants ou n'a pas répondu. Vérifiez le domaine et le jeton.";
+    return NextResponse.json({ error: `Échec de vérification des identifiants : ${userMessage}` }, { status: 400 });
   }
 
   await logAudit({

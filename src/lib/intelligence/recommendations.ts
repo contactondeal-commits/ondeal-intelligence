@@ -55,7 +55,7 @@ export function generateRecommendations(ctx: RecommendationContext): GeneratedRe
         confidence: 95,
         actionLabel: s.supplierMismatch ? "Vérifier le réassort fournisseur" : "Vérifier le fournisseur",
         actionType: "review_supplier",
-        actionPayload: { variantId: s.variantId },
+        actionPayload: { variantId: s.variantId, storeStock: s.storeStock, dailyVelocity: s.dailyVelocity },
       });
     } else if (s.status === "rupture_imminente") {
       recs.push({
@@ -68,13 +68,70 @@ export function generateRecommendations(ctx: RecommendationContext): GeneratedRe
         confidence: 85,
         actionLabel: "Vérifier le fournisseur",
         actionType: "review_supplier",
-        actionPayload: { variantId: s.variantId },
+        // storeStock/dailyVelocity réels transmis pour permettre la simulation
+        // "et si je reçois N unités ?" (Command Center → Simulation) sans
+        // recalcul dupliqué — mêmes valeurs que celles déjà utilisées par
+        // analyzeStock pour ce statut.
+        actionPayload: { variantId: s.variantId, storeStock: s.storeStock, dailyVelocity: s.dailyVelocity },
       });
     }
   }
 
   // 🔴 URGENT — marge négative / 🟠 marge faible
   for (const m of ctx.margin) {
+    // Le taux de frais de paiement n'est pas conservé tel quel dans
+    // MarginAnalysis (seul le montant € au prix actuel l'est) — il se
+    // retrouve par simple algèbre à partir de valeurs déjà réelles
+    // (paymentFees = sellingPrice × rate), jamais réinventé.
+    const paymentFeesRate =
+      m.sellingPrice && m.sellingPrice > 0 && m.paymentFees !== null ? m.paymentFees / m.sellingPrice : null;
+    const simulationPayload = {
+      productId: m.productId,
+      variantId: m.variantId,
+      currentPrice: m.sellingPrice,
+      supplierCost: m.supplierCost,
+      supplierCostSource: m.supplierCostSource,
+      shippingCost: m.shippingCost,
+      paymentFeesRate,
+      otherFixedCost: m.otherFixedCost,
+    };
+    const costLabel = m.supplierCostSource === "shopify_unit_cost" ? "coût réel Shopify" : "hypothèse de coût OnDeal";
+
+    // MARGE BRUTE (prix − coût fournisseur, avant transport/frais) : signal
+    // réel dès que le coût Shopify est connu, même sans hypothèses
+    // boutique. Jamais présenté comme une marge nette. Ne se déclenche que
+    // si la marge complète n'est pas calculable (sinon c'est elle qui parle).
+    if (m.margin === null && m.grossMargin !== null && m.grossMargin < 0) {
+      recs.push({
+        productId: m.productId,
+        category: "margin",
+        severity: "URGENT",
+        title: `Marge brute négative — ${m.title}`,
+        reason: `Le ${costLabel} (${m.supplierCost?.toFixed(2)} €) dépasse le prix de vente (${m.sellingPrice?.toFixed(2)} €), avant même transport et frais de paiement.`,
+        impact: "Chaque vente de cette variante génère une perte, quelles que soient les hypothèses de frais.",
+        confidence: 90,
+        actionLabel: "Modifier le prix",
+        actionType: "update_price",
+        actionPayload: simulationPayload,
+      });
+      continue;
+    }
+    if (m.margin === null && m.grossMarginRate !== null && m.grossMarginRate >= 0 && m.grossMarginRate < MARGIN_THRESHOLDS.faibleRate) {
+      recs.push({
+        productId: m.productId,
+        category: "margin",
+        severity: "SUGGESTION",
+        title: `Marge brute faible — ${m.title}`,
+        reason: `Marge brute de ${(m.grossMarginRate * 100).toFixed(1)}% (prix ${m.sellingPrice?.toFixed(2)} € − ${costLabel} ${m.supplierCost?.toFixed(2)} €), sous le seuil de ${MARGIN_THRESHOLDS.faibleRate * 100}% avant transport et frais de paiement.`,
+        impact: "Une fois le transport et les frais de paiement déduits, cette variante risque de ne plus rien dégager.",
+        confidence: 70,
+        actionLabel: "Revoir le prix",
+        actionType: "update_price",
+        actionPayload: simulationPayload,
+      });
+      continue;
+    }
+
     if (m.margin !== null && m.margin < 0) {
       recs.push({
         productId: m.productId,
@@ -86,7 +143,7 @@ export function generateRecommendations(ctx: RecommendationContext): GeneratedRe
         confidence: 90,
         actionLabel: "Modifier le prix",
         actionType: "update_price",
-        actionPayload: { productId: m.productId, variantId: m.variantId, currentPrice: m.sellingPrice },
+        actionPayload: simulationPayload,
       });
     } else if (
       m.marginRate !== null &&
@@ -103,9 +160,14 @@ export function generateRecommendations(ctx: RecommendationContext): GeneratedRe
         confidence: 70,
         actionLabel: "Revoir le prix ou le coût fournisseur",
         actionType: "update_price",
-        actionPayload: { productId: m.productId, variantId: m.variantId, currentPrice: m.sellingPrice },
+        actionPayload: simulationPayload,
       });
-    } else if (m.marginRate !== null && m.marginRate >= MARGIN_THRESHOLDS.fortRate) {
+    } else if (m.marginRate !== null && m.marginRate >= MARGIN_THRESHOLDS.fortRate && sellsRecently(ctx, m.productId)) {
+      // Une "forte marge" n'est une OPPORTUNITÉ de mise en avant que si le
+      // produit se vend déjà : sur un catalogue dropshipping où 90 % des
+      // variantes dépassent 40 % de marge brute, recommander de promouvoir
+      // 10 000 produits sans aucune vente n'est pas un signal — c'est du
+      // bruit (constaté sur la boutique réelle le 03/09/2026).
       recs.push({
         productId: m.productId,
         category: "margin",
@@ -203,6 +265,18 @@ export function generateRecommendations(ctx: RecommendationContext): GeneratedRe
   }
 
   return recs;
+}
+
+/**
+ * Le produit a-t-il vendu sur la fenêtre de vélocité ? Si aucune analyse de
+ * stock n'existe pour lui (contexte partiel), on ne peut pas l'exclure —
+ * comportement historique conservé ; si des analyses existent, il faut au
+ * moins une variante avec une vélocité strictement positive.
+ */
+function sellsRecently(ctx: RecommendationContext, productId: string): boolean {
+  const stockForProduct = ctx.stock.filter((s) => s.productId === productId);
+  if (stockForProduct.length === 0) return true;
+  return stockForProduct.some((s) => (s.dailyVelocity ?? 0) > 0);
 }
 
 export function severityWeight(s: GeneratedSeverity): number {

@@ -59,7 +59,7 @@ export async function getSession(): Promise<SessionPayload | null> {
   const token = store.get(SESSION_COOKIE)?.value;
   if (!token) return null;
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    const { payload } = await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
     if (typeof payload.userId !== "string" || typeof payload.email !== "string") return null;
     return { userId: payload.userId, email: payload.email };
   } catch {
@@ -118,3 +118,16 @@ export async function requireStoreAccess(storeId: string): Promise<{
 }
 
 export class AuthError extends Error {}
+
+/**
+ * Rôles autorisés à MODIFIER l'état d'une boutique (mutation Shopify,
+ * intégrations, hypothèses de coût, synchronisation). VIEWER = lecture seule.
+ * Vérification serveur explicite (production 04/09/2026) — indépendante du
+ * menu rendu côté client.
+ */
+export const WRITE_ROLES: ReadonlyArray<Role> = ["OWNER", "ADMIN", "ANALYST"];
+export const ADMIN_ROLES: ReadonlyArray<Role> = ["OWNER", "ADMIN"];
+
+export function requireRole(role: Role, allowed: ReadonlyArray<Role>): void {
+  if (!allowed.includes(role)) throw new AuthError("Votre rôle ne permet pas cette opération.");
+}

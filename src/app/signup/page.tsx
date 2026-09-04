@@ -38,12 +38,14 @@ export default function SignupPage() {
         <form onSubmit={onSubmit}>
           <div className="field">
             <label>Nom</label>
-            <input className="input" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            <input className="input" name="name" autoComplete="name" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </div>
           <div className="field">
             <label>Nom de votre organisation</label>
             <input
               className="input"
+              name="organizationName"
+              autoComplete="organization"
               required
               placeholder="ex. OnDeal"
               value={form.organizationName}
@@ -52,15 +54,18 @@ export default function SignupPage() {
           </div>
           <div className="field">
             <label>Email</label>
-            <input className="input" type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            <input className="input" name="email" type="email" autoComplete="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
           </div>
           <div className="field">
             <label>Mot de passe (8 caractères min.)</label>
             <input
               className="input"
+              name="password"
               type="password"
+              autoComplete="new-password"
               required
               minLength={8}
+              maxLength={128}
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />

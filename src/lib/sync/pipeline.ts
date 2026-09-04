@@ -4,23 +4,36 @@ import { logAudit } from "@/lib/audit";
 import {
   fetchAllProducts,
   fetchRecentOrders,
+  type FetchStats,
   type ShopifyCredentials,
 } from "@/lib/integrations/shopify";
 import { fetchAllReviews, type JudgemeCredentials } from "@/lib/integrations/judgeme";
-import { normalizeVariant, normalizeHandle, type NormalizeIssue } from "@/lib/validation/normalize";
+import type { NormalizeIssue } from "@/lib/validation/normalize";
 import { recomputeStoreIntelligence } from "@/lib/intelligence/pipeline";
+import { storeProducts, storeOrders, rebuildSalesSnapshots } from "@/lib/sync/shopifyStore";
 
 // PHASE 15 — Synchronisation : FETCH → VALIDATE → NORMALIZE → STORE →
 // ANALYZE → INSIGHTS. Chaque étape est tracée dans SyncRun + AuditLog.
 // Synchronisation manuelle (déclenchée depuis l'UI) et automatique
 // (planifiée) partagent ce même pipeline (voir docs/ARCHITECTURE.md).
+// L'étape STORE vit dans `shopifyStore.ts`, partagée avec l'import bulk.
+
+/** Fenêtre de commandes lue à chaque synchronisation (jours). */
+export const ORDERS_WINDOW_DAYS = 90;
 
 export async function syncShopify(storeId: string, triggeredBy: "manual" | "scheduled"): Promise<{
-  status: "success" | "partial" | "error" | "not_connected";
+  status: "success" | "partial" | "error" | "not_connected" | "refused_demo";
   itemsFetched: number;
   itemsStored: number;
   errorCount: number;
 }> {
+  // Une boutique de démonstration n'est JAMAIS synchronisée : ses données
+  // fictives ne doivent ni être écrasées par des données réelles, ni
+  // l'inverse. Refus explicite, tracé.
+  const store = await prisma.store.findUnique({ where: { id: storeId }, select: { isDemo: true, currency: true } });
+  if (!store) return { status: "error", itemsFetched: 0, itemsStored: 0, errorCount: 1 };
+  if (store.isDemo) return { status: "refused_demo", itemsFetched: 0, itemsStored: 0, errorCount: 0 };
+
   const integration = await prisma.integration.findUnique({
     where: { storeId_provider: { storeId, provider: "SHOPIFY" } },
   });
@@ -36,99 +49,34 @@ export async function syncShopify(storeId: string, triggeredBy: "manual" | "sche
   let itemsFetched = 0;
   let itemsStored = 0;
   const issues: NormalizeIssue[] = [];
+  const stats: Record<string, unknown> = {};
 
   try {
     const creds = decryptJson<ShopifyCredentials>(integration.encryptedCredentials);
 
-    // FETCH
-    const products = await fetchAllProducts(creds);
+    // FETCH produits + variantes (pagination complète)
+    const fetchStats: FetchStats = { pages: 0, continuationRequests: 0 };
+    const fetchStarted = Date.now();
+    const products = await fetchAllProducts(creds, undefined, fetchStats);
+    stats.productsFetch = { ...fetchStats, durationMs: Date.now() - fetchStarted };
     itemsFetched = products.length;
 
     // VALIDATE + NORMALIZE + STORE
-    for (const p of products) {
-      const { handle, issue: handleIssue } = normalizeHandle(p.handle, p.id);
-      if (handleIssue) issues.push(handleIssue);
+    const productStats = await storeProducts(storeId, store.currency, products, issues);
+    stats.products = productStats;
+    itemsStored = productStats.productsStored;
 
-      const product = await prisma.product.upsert({
-        where: { storeId_shopifyProductId: { storeId, shopifyProductId: p.id } },
-        create: {
-          storeId,
-          shopifyProductId: p.id,
-          handle,
-          title: p.title || "(sans titre)",
-          status: p.status.toLowerCase(),
-          productType: p.productType,
-          vendor: p.vendor,
-          imageUrl: p.featuredImage?.url ?? null,
-          createdAtShopify: new Date(p.createdAt),
-        },
-        update: {
-          handle,
-          title: p.title || "(sans titre)",
-          status: p.status.toLowerCase(),
-          productType: p.productType,
-          vendor: p.vendor,
-          imageUrl: p.featuredImage?.url ?? null,
-        },
-      });
-      itemsStored += 1;
-
-      for (const rawVariant of p.variants.nodes) {
-        const { variant, issues: variantIssues } = normalizeVariant(rawVariant);
-        issues.push(...variantIssues);
-        if (!variant) continue;
-
-        await prisma.variant.upsert({
-          where: { productId_shopifyVariantId: { productId: product.id, shopifyVariantId: variant.shopifyVariantId } },
-          create: {
-            productId: product.id,
-            shopifyVariantId: variant.shopifyVariantId,
-            title: variant.title,
-            sku: variant.sku,
-            price: variant.price,
-            compareAtPrice: variant.compareAtPrice,
-            inventoryQuantity: variant.inventoryQuantity,
-          },
-          update: {
-            title: variant.title,
-            sku: variant.sku,
-            price: variant.price,
-            compareAtPrice: variant.compareAtPrice,
-            inventoryQuantity: variant.inventoryQuantity,
-          },
-        });
-      }
-    }
-
-    // Vitesse de vente : commandes des 30 derniers jours → SalesSnapshot quotidien agrégé
+    // Commandes + lignes (pagination complète) → entités → agrégat quotidien
     try {
-      const orders = await fetchRecentOrders(creds, 30);
-      const byProductAndDay = new Map<string, { shopifyProductId: string; day: string; unitsSold: number; revenue: number }>();
-      for (const order of orders) {
-        const day = order.createdAt.slice(0, 10);
-        for (const li of order.lineItems) {
-          if (!li.productId) continue;
-          const key = `${li.productId}__${day}`;
-          const entry = byProductAndDay.get(key) ?? { shopifyProductId: li.productId, day, unitsSold: 0, revenue: 0 };
-          entry.unitsSold += li.quantity;
-          entry.revenue += li.amount;
-          byProductAndDay.set(key, entry);
-        }
-      }
-      for (const agg of byProductAndDay.values()) {
-        const product = await prisma.product.findUnique({
-          where: { storeId_shopifyProductId: { storeId, shopifyProductId: agg.shopifyProductId } },
-          select: { id: true },
-        });
-        if (!product) continue;
-        await prisma.salesSnapshot.upsert({
-          where: { productId_date: { productId: product.id, date: new Date(agg.day) } },
-          create: { productId: product.id, date: new Date(agg.day), unitsSold: agg.unitsSold, revenue: agg.revenue },
-          update: { unitsSold: agg.unitsSold, revenue: agg.revenue },
-        });
-      }
+      const orderFetchStats: FetchStats = { pages: 0, continuationRequests: 0 };
+      const orderFetchStarted = Date.now();
+      const orders = await fetchRecentOrders(creds, ORDERS_WINDOW_DAYS, orderFetchStats);
+      stats.ordersFetch = { ...orderFetchStats, windowDays: ORDERS_WINDOW_DAYS, durationMs: Date.now() - orderFetchStarted };
+      stats.orders = await storeOrders(storeId, orders);
+      stats.salesSnapshots = await rebuildSalesSnapshots(storeId, new Date(Date.now() - ORDERS_WINDOW_DAYS * 24 * 60 * 60 * 1000));
     } catch (err) {
       issues.push({ field: "orders", problem: `Échec de récupération des commandes: ${String(err)}`, original: null, corrected: null });
+      stats.ordersError = String(err);
     }
 
     await prisma.integration.update({
@@ -136,15 +84,24 @@ export async function syncShopify(storeId: string, triggeredBy: "manual" | "sche
       data: { lastSyncedAt: new Date(), lastError: null },
     });
 
+    // Distinction explicite : une ERREUR est une donnée non stockée (variante
+    // rejetée, commandes non lues) ; un SIGNALEMENT QUALITÉ est une donnée
+    // stockée telle quelle mais incohérente (prix barré ≤ prix…). Les deux
+    // sont tracés, seuls les premiers dégradent le statut du SyncRun.
+    const qualityWarnings = Object.values(productStats.issueCountsByProblem).reduce((s, n) => s + n, 0);
+    const hardErrors = productStats.variantsRejected + (stats.ordersError ? 1 : 0);
+    stats.qualityWarnings = qualityWarnings;
+    stats.hardErrors = hardErrors;
     await prisma.syncRun.update({
       where: { id: run.id },
       data: {
-        status: issues.length > 0 ? "partial" : "success",
+        status: hardErrors > 0 ? "partial" : "success",
         finishedAt: new Date(),
         itemsFetched,
         itemsStored,
-        errorCount: issues.length,
+        errorCount: hardErrors,
         errorSample: issues.length > 0 ? JSON.stringify(issues.slice(0, 20)) : null,
+        statsJson: JSON.stringify(stats),
       },
     });
 
@@ -152,18 +109,18 @@ export async function syncShopify(storeId: string, triggeredBy: "manual" | "sche
       storeId,
       actorType: "system",
       event: "sync.completed",
-      message: `Synchronisation Shopify : ${itemsStored}/${itemsFetched} produits stockés, ${issues.length} anomalie(s) corrigée(s).`,
-      meta: { itemsFetched, itemsStored, issueCount: issues.length },
+      message: `Synchronisation Shopify : ${itemsStored}/${itemsFetched} produits, ${productStats.variantsStored} variantes (${productStats.variantsWithUnitCost} avec coût unitaire Shopify), ${hardErrors} erreur(s), ${qualityWarnings} signalement(s) qualité.`,
+      meta: { itemsFetched, itemsStored, hardErrors, qualityWarnings },
     });
 
     // ANALYZE → INSIGHTS
     await recomputeStoreIntelligence(storeId);
 
     return {
-      status: issues.length > 0 ? "partial" : "success",
+      status: hardErrors > 0 ? "partial" : "success",
       itemsFetched,
       itemsStored,
-      errorCount: issues.length,
+      errorCount: hardErrors,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

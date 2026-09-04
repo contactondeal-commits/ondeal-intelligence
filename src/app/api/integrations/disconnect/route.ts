@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireStoreAccess, AuthError } from "@/lib/auth";
+import { z } from "zod";
+import { requireStoreAccess, requireRole, ADMIN_ROLES, AuthError } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 
 export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null);
-  const { storeId, provider } = body ?? {};
-  if (!storeId || !provider) return NextResponse.json({ error: "Champs manquants." }, { status: 400 });
+  const parsed = z.object({ storeId: z.string().min(1).max(64), provider: z.enum(["SHOPIFY", "JUDGEME"]) }).strict().safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "Champs manquants ou invalides." }, { status: 400 });
+  const { storeId, provider } = parsed.data;
 
   let userId: string;
   try {
-    ({ userId } = await requireStoreAccess(storeId));
+    const access = await requireStoreAccess(storeId);
+    userId = access.userId;
+    requireRole(access.role, ADMIN_ROLES);
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: 403 });
     throw err;

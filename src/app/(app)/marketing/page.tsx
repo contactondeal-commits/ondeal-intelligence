@@ -1,11 +1,20 @@
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
+import FeatureUnavailable from "@/components/FeatureUnavailable";
+import { hasFeature } from "@/lib/plan-limits";
 import ContentGenerator from "@/components/ContentGenerator";
 import { detectMarketingOpportunities, type MarketingProductInput } from "@/lib/intelligence/marketing";
 
 export default async function MarketingPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
   const store = await requireStore(await searchParams);
+  if (!hasFeature(store.plan, "marketing")) {
+    return (
+      <AppShell store={store} active="/marketing">
+        <FeatureUnavailable feature="Marketing Intelligence" plan={store.plan} storeId={store.id} />
+      </AppShell>
+    );
+  }
 
   const products = await prisma.product.findMany({
     where: { storeId: store.id },
@@ -41,7 +50,7 @@ export default async function MarketingPage({ searchParams }: { searchParams: Pr
       <p className="page-subtitle" style={{ marginBottom: 18 }}>Opportunités marketing et génération de contenu à partir de vos vraies données produit.</p>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>🏠 Homepage Intelligence — sélection recommandée</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Homepage Intelligence — sélection recommandée</h2>
         {homepageSelection.length === 0 ? (
           <p className="unavailable-note">Pas encore assez de données pour recommander une sélection.</p>
         ) : (
@@ -57,7 +66,7 @@ export default async function MarketingPage({ searchParams }: { searchParams: Pr
       </div>
 
       <div className="card" style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>📣 Opportunités marketing détectées</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Opportunités marketing détectées</h2>
         {opportunities.length === 0 ? (
           <p className="unavailable-note">Aucune opportunité détectée pour le moment.</p>
         ) : (
@@ -77,7 +86,7 @@ export default async function MarketingPage({ searchParams }: { searchParams: Pr
       </div>
 
       <div className="card">
-        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>✍️ Générateur de contenu (données réelles uniquement)</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Générateur de contenu (données réelles uniquement)</h2>
         <ContentGenerator products={products.map((p) => ({ id: p.id, title: p.title }))} storeId={store.id} />
       </div>
     </AppShell>

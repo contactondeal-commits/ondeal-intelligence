@@ -14,15 +14,15 @@ export default function StoreSwitcher({
 
   return (
     <select
-      className="input"
-      style={{ background: "rgba(255,255,255,0.1)", color: "#fff", borderColor: "rgba(255,255,255,0.2)", marginBottom: 8 }}
+      className="input store-switcher"
+      aria-label="Changer de boutique"
       value={currentStoreId}
       onChange={(e) => router.push(`${pathname}?store=${e.target.value}`)}
     >
       {stores.map((s) => (
-        <option key={s.id} value={s.id} style={{ color: "#000" }}>
-          {s.isDemo ? "🧪 " : ""}
+        <option key={s.id} value={s.id}>
           {s.name}
+          {s.isDemo ? " (démo)" : ""}
         </option>
       ))}
     </select>

@@ -69,6 +69,19 @@ export async function verifyShopifyCredentials(creds: ShopifyCredentials): Promi
   return { shopName: data.shop.name };
 }
 
+export interface ShopifyVariantNode {
+  id: string;
+  title: string;
+  sku: string | null;
+  price: string;
+  compareAtPrice: string | null;
+  inventoryQuantity: number | null;
+  // Coût unitaire RÉEL renseigné dans Shopify (inventoryItem.unitCost) —
+  // null si le marchand ne l'a pas saisi. Jamais confondu avec les
+  // CostAssumption saisies dans OnDeal.
+  inventoryItem: { tracked: boolean; unitCost: { amount: string; currencyCode: string } | null } | null;
+}
+
 export interface ShopifyProductNode {
   id: string;
   handle: string;
@@ -79,17 +92,22 @@ export interface ShopifyProductNode {
   createdAt: string;
   featuredImage: { url: string } | null;
   variants: {
-    nodes: Array<{
-      id: string;
-      title: string;
-      sku: string | null;
-      price: string;
-      compareAtPrice: string | null;
-      inventoryQuantity: number | null;
-    }>;
+    nodes: ShopifyVariantNode[];
   };
 }
 
+interface PageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+const VARIANT_FIELDS = `id title sku price compareAtPrice inventoryQuantity inventoryItem { tracked unitCost { amount currencyCode } }`;
+
+// Pagination COMPLÈTE des variantes : première page de 100 par produit dans
+// la requête catalogue, puis `PRODUCT_VARIANTS_QUERY` tant que
+// `hasNextPage` est vrai. Un produit Shopify peut avoir jusqu'à 100
+// variantes (2 000 avec l'option étendue) : l'ancienne limite `first: 25`
+// tronquait silencieusement tout produit au-delà de 25 variantes.
 const PRODUCTS_QUERY = `
   query Products($cursor: String) {
     products(first: 50, after: $cursor) {
@@ -103,18 +121,37 @@ const PRODUCTS_QUERY = `
         vendor
         createdAt
         featuredImage { url }
-        variants(first: 25) {
-          nodes { id title sku price compareAtPrice inventoryQuantity }
+        variants(first: 100) {
+          pageInfo { hasNextPage endCursor }
+          nodes { ${VARIANT_FIELDS} }
         }
       }
     }
   }
 `;
 
-/** Récupère TOUT le catalogue avec pagination automatique (PHASE 15/19). */
+const PRODUCT_VARIANTS_QUERY = `
+  query ProductVariants($productId: ID!, $cursor: String) {
+    product(id: $productId) {
+      variants(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ${VARIANT_FIELDS} }
+      }
+    }
+  }
+`;
+
+export interface FetchStats {
+  pages: number;
+  /** Nombre de requêtes de continuation (variantes ou lignes au-delà de la première page). */
+  continuationRequests: number;
+}
+
+/** Récupère TOUT le catalogue avec pagination automatique des produits ET des variantes (PHASE 15/19). */
 export async function fetchAllProducts(
   creds: ShopifyCredentials,
   onPage?: (nodes: ShopifyProductNode[]) => void,
+  stats?: FetchStats,
 ): Promise<ShopifyProductNode[]> {
   const all: ShopifyProductNode[] = [];
   let cursor: string | null = null;
@@ -122,10 +159,35 @@ export async function fetchAllProducts(
 
   while (hasNextPage) {
     const data: {
-      products: { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: ShopifyProductNode[] };
+      products: {
+        pageInfo: PageInfo;
+        nodes: Array<Omit<ShopifyProductNode, "variants"> & { variants: { pageInfo: PageInfo; nodes: ShopifyVariantNode[] } }>;
+      };
     } = await graphqlRequest(creds, PRODUCTS_QUERY, { cursor });
-    all.push(...data.products.nodes);
-    onPage?.(data.products.nodes);
+    if (stats) stats.pages += 1;
+
+    const pageNodes: ShopifyProductNode[] = [];
+    for (const p of data.products.nodes) {
+      const variants = [...p.variants.nodes];
+      let vCursor = p.variants.pageInfo.endCursor;
+      let vHasNext = p.variants.pageInfo.hasNextPage;
+      while (vHasNext) {
+        const more: { product: { variants: { pageInfo: PageInfo; nodes: ShopifyVariantNode[] } } | null } = await graphqlRequest(
+          creds,
+          PRODUCT_VARIANTS_QUERY,
+          { productId: p.id, cursor: vCursor },
+        );
+        if (stats) stats.continuationRequests += 1;
+        if (!more.product) break;
+        variants.push(...more.product.variants.nodes);
+        vHasNext = more.product.variants.pageInfo.hasNextPage;
+        vCursor = more.product.variants.pageInfo.endCursor;
+      }
+      pageNodes.push({ ...p, variants: { nodes: variants } });
+    }
+
+    all.push(...pageNodes);
+    onPage?.(pageNodes);
     hasNextPage = data.products.pageInfo.hasNextPage;
     cursor = data.products.pageInfo.endCursor;
   }
@@ -133,31 +195,112 @@ export async function fetchAllProducts(
   return all;
 }
 
+const LINE_ITEM_FIELDS = `id quantity currentQuantity originalTotalSet { shopMoney { amount } } discountedTotalSet { shopMoney { amount } } product { id } variant { id }`;
+
+// Commandes : entités complètes (annulation, statut financier, total,
+// remboursé) et lignes avec variante, pagination des lignes au-delà de 100.
 const ORDERS_QUERY = `
   query Orders($cursor: String, $query: String) {
-    orders(first: 50, after: $cursor, query: $query) {
+    orders(first: 50, after: $cursor, query: $query, sortKey: CREATED_AT) {
       pageInfo { hasNextPage endCursor }
       nodes {
         id
+        name
         createdAt
-        lineItems(first: 50) {
-          nodes { quantity originalTotalSet { shopMoney { amount } } product { id } }
+        cancelledAt
+        displayFinancialStatus
+        currentTotalPriceSet { shopMoney { amount currencyCode } }
+        totalRefundedSet { shopMoney { amount } }
+        lineItems(first: 100) {
+          pageInfo { hasNextPage endCursor }
+          nodes { ${LINE_ITEM_FIELDS} }
         }
       }
     }
   }
 `;
 
+const ORDER_LINES_QUERY = `
+  query OrderLines($orderId: ID!, $cursor: String) {
+    order(id: $orderId) {
+      lineItems(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ${LINE_ITEM_FIELDS} }
+      }
+    }
+  }
+`;
+
 export interface ShopifyOrderLineItem {
+  id: string;
   quantity: number;
-  amount: number;
+  /** Quantité restante après retraits/remboursements d'articles (Shopify `currentQuantity`). */
+  currentQuantity: number;
+  /** Montant de ligne AVANT remises. */
+  originalTotal: number;
+  /** Montant de ligne APRÈS remises (ligne + allocation des remises commande). */
+  discountedTotal: number;
   productId: string | null;
+  variantId: string | null;
 }
 
 export interface ShopifyOrderNode {
   id: string;
+  name: string | null;
   createdAt: string;
+  cancelledAt: string | null;
+  financialStatus: string | null;
+  currencyCode: string | null;
+  totalPrice: number | null;
+  totalRefunded: number | null;
   lineItems: ShopifyOrderLineItem[];
+}
+
+interface RawLineItem {
+  id: string;
+  quantity: number;
+  currentQuantity: number;
+  originalTotalSet: { shopMoney: { amount: string } };
+  discountedTotalSet: { shopMoney: { amount: string } };
+  product: { id: string } | null;
+  variant: { id: string } | null;
+}
+
+interface RawOrder {
+  id: string;
+  name: string | null;
+  createdAt: string;
+  cancelledAt: string | null;
+  displayFinancialStatus: string | null;
+  currentTotalPriceSet: { shopMoney: { amount: string; currencyCode: string } } | null;
+  totalRefundedSet: { shopMoney: { amount: string } } | null;
+  lineItems: { pageInfo: PageInfo; nodes: RawLineItem[] };
+}
+
+export function mapLineItem(li: RawLineItem): ShopifyOrderLineItem {
+  return {
+    id: li.id,
+    quantity: li.quantity,
+    currentQuantity: li.currentQuantity,
+    originalTotal: Number(li.originalTotalSet.shopMoney.amount) || 0,
+    discountedTotal: Number(li.discountedTotalSet.shopMoney.amount) || 0,
+    productId: li.product?.id ?? null,
+    variantId: li.variant?.id ?? null,
+  };
+}
+
+export function mapOrder(o: Omit<RawOrder, "lineItems">, lineItems: RawLineItem[]): ShopifyOrderNode {
+  return {
+    id: o.id,
+    name: o.name ?? null,
+    createdAt: o.createdAt,
+    cancelledAt: o.cancelledAt ?? null,
+    financialStatus: o.displayFinancialStatus ?? null,
+    currencyCode: o.currentTotalPriceSet?.shopMoney.currencyCode ?? null,
+    totalPrice: o.currentTotalPriceSet ? Number(o.currentTotalPriceSet.shopMoney.amount) : null,
+    totalRefunded: o.totalRefundedSet ? Number(o.totalRefundedSet.shopMoney.amount) : null,
+    lineItems: lineItems.map(mapLineItem),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -218,35 +361,41 @@ export async function updateProductStatus(
   return { ok: true, status: data.productUpdate.product.status };
 }
 
-/** Récupère les commandes des `days` derniers jours (pour la vélocité de vente — PHASE 6). */
-export async function fetchRecentOrders(creds: ShopifyCredentials, days: number): Promise<ShopifyOrderNode[]> {
+/**
+ * Récupère les commandes des `days` derniers jours avec pagination complète
+ * des commandes ET de leurs lignes (l'ancienne limite `lineItems(first: 50)`
+ * tronquait silencieusement les grosses commandes). Lecture seule.
+ */
+export async function fetchRecentOrders(creds: ShopifyCredentials, days: number, stats?: FetchStats): Promise<ShopifyOrderNode[]> {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
   const all: ShopifyOrderNode[] = [];
   let cursor: string | null = null;
   let hasNextPage = true;
 
   while (hasNextPage) {
-    const data: {
-      orders: {
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-        nodes: Array<{
-          id: string;
-          createdAt: string;
-          lineItems: { nodes: Array<{ quantity: number; originalTotalSet: { shopMoney: { amount: string } }; product: { id: string } | null }> };
-        }>;
-      };
-    } = await graphqlRequest(creds, ORDERS_QUERY, { cursor, query: `created_at:>=${since}` });
+    const data: { orders: { pageInfo: PageInfo; nodes: RawOrder[] } } = await graphqlRequest(creds, ORDERS_QUERY, {
+      cursor,
+      query: `created_at:>=${since}`,
+    });
+    if (stats) stats.pages += 1;
 
     for (const o of data.orders.nodes) {
-      all.push({
-        id: o.id,
-        createdAt: o.createdAt,
-        lineItems: o.lineItems.nodes.map((li) => ({
-          quantity: li.quantity,
-          amount: Number(li.originalTotalSet.shopMoney.amount) || 0,
-          productId: li.product?.id ?? null,
-        })),
-      });
+      const lines = [...o.lineItems.nodes];
+      let lCursor = o.lineItems.pageInfo.endCursor;
+      let lHasNext = o.lineItems.pageInfo.hasNextPage;
+      while (lHasNext) {
+        const more: { order: { lineItems: { pageInfo: PageInfo; nodes: RawLineItem[] } } | null } = await graphqlRequest(
+          creds,
+          ORDER_LINES_QUERY,
+          { orderId: o.id, cursor: lCursor },
+        );
+        if (stats) stats.continuationRequests += 1;
+        if (!more.order) break;
+        lines.push(...more.order.lineItems.nodes);
+        lHasNext = more.order.lineItems.pageInfo.hasNextPage;
+        lCursor = more.order.lineItems.pageInfo.endCursor;
+      }
+      all.push(mapOrder(o, lines));
     }
     hasNextPage = data.orders.pageInfo.hasNextPage;
     cursor = data.orders.pageInfo.endCursor;

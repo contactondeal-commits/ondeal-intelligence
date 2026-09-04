@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
+import Button from "@/components/ui/Button";
 
 export default function SyncButton({
   storeId,
@@ -34,9 +36,17 @@ export default function SyncButton({
 
   return (
     <div style={{ textAlign: "right" }}>
-      <button className="btn btn-primary" onClick={runSync} disabled={loading || disabled} title={disabled ? "Connectez au moins une intégration" : undefined}>
-        {loading ? "Synchronisation…" : "🔄 Synchroniser maintenant"}
-      </button>
+      <Button
+        variant="primary"
+        size="sm"
+        icon={<RefreshCw size={14} className={loading ? "spin" : undefined} />}
+        onClick={runSync}
+        loading={loading}
+        disabled={disabled}
+        title={disabled ? "Connectez au moins une intégration" : undefined}
+      >
+        {loading ? "Synchronisation…" : "Synchroniser"}
+      </Button>
       {result && <div className="unavailable-note" style={{ marginTop: 6 }}>{result}</div>}
     </div>
   );

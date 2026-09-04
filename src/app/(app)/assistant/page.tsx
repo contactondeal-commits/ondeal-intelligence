@@ -1,5 +1,7 @@
 import { requireStore } from "@/lib/store-context";
 import AppShell from "@/components/AppShell";
+import FeatureUnavailable from "@/components/FeatureUnavailable";
+import { hasFeature } from "@/lib/plan-limits";
 import AssistantChat from "@/components/AssistantChat";
 
 const SUGGESTED_QUESTIONS = [
@@ -15,6 +17,13 @@ const SUGGESTED_QUESTIONS = [
 
 export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
   const store = await requireStore(await searchParams);
+  if (!hasFeature(store.plan, "assistant")) {
+    return (
+      <AppShell store={store} active="/assistant">
+        <FeatureUnavailable feature="OnDeal AI" plan={store.plan} storeId={store.id} />
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell store={store} active="/assistant">

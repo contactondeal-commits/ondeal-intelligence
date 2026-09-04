@@ -9,7 +9,7 @@ import { seedDemoStore } from "@/lib/demo/seedDemoStore";
 const schema = z.object({
   mode: z.enum(["real", "demo"]),
   storeName: z.string().min(1).max(160).optional(),
-  domain: z.string().optional(),
+  domain: z.string().trim().max(253).regex(/^[a-z0-9.-]*$/i, "Domaine invalide.").optional(),
 });
 
 export async function POST(req: NextRequest) {

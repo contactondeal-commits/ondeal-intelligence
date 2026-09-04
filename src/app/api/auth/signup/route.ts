@@ -2,15 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { hashPassword, createSession, setSessionCookie } from "@/lib/auth";
+import { rateLimit, clientIp } from "@/lib/rate-limit";
 
 const schema = z.object({
   name: z.string().min(1).max(120),
   email: z.string().email(),
-  password: z.string().min(8, "8 caractères minimum."),
+  password: z.string().min(8, "8 caractères minimum.").max(128, "128 caractères maximum."),
   organizationName: z.string().min(1).max(160),
 });
 
 export async function POST(req: NextRequest) {
+  const limited = rateLimit(`signup:${clientIp(req)}`, { max: 5, windowMs: 15 * 60 * 1000 });
+  if (!limited.ok) return NextResponse.json({ error: "Trop de tentatives. Réessayez dans quelques minutes." }, { status: 429, headers: { "Retry-After": String(limited.retryAfterSeconds) } });
+
   const body = await req.json().catch(() => null);
   const parsed = schema.safeParse(body);
   if (!parsed.success) {

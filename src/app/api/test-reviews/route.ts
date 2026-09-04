@@ -4,16 +4,16 @@ import { prisma } from "@/lib/db";
 import { requireStoreAccess, AuthError } from "@/lib/auth";
 
 const schema = z.object({
-  storeId: z.string(),
+  storeId: z.string().min(1).max(64),
   reviews: z
     .array(
       z.object({
-        handle: z.string(),
+        handle: z.string().max(255),
         rating: z.number().int().min(1).max(5),
-        title: z.string(),
-        body: z.string(),
-        author: z.string(),
-        email: z.string(),
+        title: z.string().max(200),
+        body: z.string().max(2000),
+        author: z.string().max(120),
+        email: z.string().max(254),
       }),
     )
     .max(200),

@@ -1,97 +1,181 @@
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
-import MetricCard from "@/components/MetricCard";
+import Pagination from "@/components/ui/Pagination";
+import TableControls from "@/components/ui/TableControls";
+import DataTag from "@/components/ui/DataTag";
+import { parsePageParams } from "@/lib/pagination";
 import { analyzeStock, summarizeStock, type StockInput } from "@/lib/intelligence/stock";
+import { salesWindowStart, unitsSoldInWindow } from "@/lib/intelligence/salesWindow";
+import type { StockAnalysis } from "@/types";
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
-  rupture: { label: "🔴 Rupture", cls: "badge-urgent" },
-  rupture_imminente: { label: "🟠 Rupture imminente", cls: "badge-opportunity" },
-  stock_faible: { label: "🟡 Stock faible", cls: "badge-neutral" },
-  stock_normal: { label: "🟢 Normal", cls: "badge-suggestion" },
-  surstock: { label: "🔵 Surstock", cls: "badge-neutral" },
-  stock_dormant: { label: "⚪ Dormant", cls: "badge-neutral" },
-  inconnu: { label: "Inconnu", cls: "badge-neutral" },
+  rupture: { label: "Rupture", cls: "badge-urgent" },
+  rupture_imminente: { label: "Rupture imminente", cls: "badge-opportunity" },
+  stock_faible: { label: "Stock faible", cls: "badge-neutral" },
+  stock_normal: { label: "Normal", cls: "badge-suggestion" },
+  surstock: { label: "Surstock", cls: "badge-neutral" },
+  stock_dormant: { label: "Dormant", cls: "badge-neutral" },
+  inconnu: { label: "Vélocité inconnue", cls: "badge-neutral" },
 };
 
-export default async function StockPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
-  const store = await requireStore(await searchParams);
+type Params = { store?: string; q?: string; status?: string; sort?: string; page?: string; pageSize?: string };
 
-  const products = await prisma.product.findMany({
-    where: { storeId: store.id },
-    include: { variants: true, salesSnapshots: { orderBy: { date: "desc" }, take: 30 } },
-  });
+const STATUS_OPTIONS = [
+  { value: "all", label: "Tous les statuts" },
+  { value: "critical", label: "Critique (rupture, imminente, incohérence)" },
+  ...Object.entries(STATUS_META).map(([value, m]) => ({ value, label: m.label })),
+];
+const SORT_OPTIONS = [
+  { value: "critical", label: "Criticité" },
+  { value: "stock_asc", label: "Stock croissant" },
+  { value: "stock_desc", label: "Stock décroissant" },
+  { value: "title", label: "Nom du produit" },
+];
+const STATUS_ORDER: Record<string, number> = { rupture: 0, rupture_imminente: 1, stock_faible: 2, stock_dormant: 3, surstock: 4, stock_normal: 5, inconnu: 6 };
 
-  const analyses = products.flatMap((p) =>
-    p.variants.map((v) => {
-      const unitsSoldLast30Days = p.salesSnapshots.length > 0 ? p.salesSnapshots.reduce((s, x) => s + x.unitsSold, 0) : null;
-      const input: StockInput = {
-        productId: p.id,
-        variantId: v.id,
-        title: p.variants.length > 1 ? `${p.title} — ${v.title}` : p.title,
-        sku: v.sku,
-        storeStock: v.inventoryQuantity,
-        supplierStock: v.supplierStock,
-        unitsSoldLast30Days,
-        lastSyncedAt: v.updatedAt.toISOString(),
-      };
-      return analyzeStock(input);
+/**
+ * STOCK INTELLIGENCE — analyse de toutes les variantes en mémoire à partir
+ * d'une lecture légère (id, stock, ventes 30 j agrégées par produit), puis
+ * pagination : jamais les 16 407 lignes dans le HTML. Mêmes fonctions pures
+ * que le pipeline (`analyzeStock`, `salesWindow`).
+ */
+export default async function StockPage({ searchParams }: { searchParams: Promise<Params> }) {
+  const params = await searchParams;
+  const store = await requireStore(params);
+  const { page, pageSize } = parsePageParams(params);
+  const status = STATUS_OPTIONS.some((o) => o.value === params.status) ? (params.status as string) : "all";
+  const sort = SORT_OPTIONS.some((o) => o.value === params.sort) ? (params.sort as string) : "critical";
+
+  const [products, variants, salesInWindow, salesHistory] = await Promise.all([
+    prisma.product.findMany({ where: { storeId: store.id }, select: { id: true, title: true, _count: { select: { variants: true } } } }),
+    prisma.variant.findMany({
+      where: { product: { storeId: store.id } },
+      select: { id: true, productId: true, title: true, sku: true, inventoryQuantity: true, supplierStock: true, updatedAt: true },
     }),
-  );
+    prisma.salesSnapshot.groupBy({ by: ["productId"], where: { product: { storeId: store.id }, date: { gte: salesWindowStart() } }, _sum: { unitsSold: true } }),
+    prisma.salesSnapshot.groupBy({ by: ["productId"], where: { product: { storeId: store.id } }, _count: true }),
+  ]);
+  const productById = new Map(products.map((p) => [p.id, p]));
+  const unitsByProduct = new Map(salesInWindow.map((s) => [s.productId, s._sum.unitsSold ?? 0]));
+  const historyByProduct = new Set(salesHistory.map((s) => s.productId));
+
+  const analyses: StockAnalysis[] = variants.map((v) => {
+    const p = productById.get(v.productId);
+    const units = unitsByProduct.has(v.productId) ? [{ unitsSold: unitsByProduct.get(v.productId)! }] : [];
+    const input: StockInput = {
+      productId: v.productId,
+      variantId: v.id,
+      title: p ? (p._count.variants > 1 ? `${p.title} — ${v.title}` : p.title) : v.title,
+      sku: v.sku,
+      storeStock: v.inventoryQuantity,
+      supplierStock: v.supplierStock,
+      unitsSoldLast30Days: unitsSoldInWindow(units, historyByProduct.has(v.productId)),
+      lastSyncedAt: v.updatedAt.toISOString(),
+    };
+    return analyzeStock(input);
+  });
 
   const summary = summarizeStock(analyses);
   const anyData = analyses.length > 0;
+  const criticalCount = analyses.filter((a) => a.status === "rupture" || a.status === "rupture_imminente" || a.supplierMismatch).length;
+  const q = params.q?.trim().toLowerCase();
 
-  const critical = analyses.filter((a) => a.status === "rupture" || a.status === "rupture_imminente" || a.supplierMismatch);
-  const rest = analyses.filter((a) => !critical.includes(a));
+  let filtered = analyses;
+  if (status === "critical") filtered = filtered.filter((a) => a.status === "rupture" || a.status === "rupture_imminente" || a.supplierMismatch);
+  else if (status !== "all") filtered = filtered.filter((a) => a.status === status);
+  if (q) filtered = filtered.filter((a) => a.title.toLowerCase().includes(q) || (a.sku ?? "").toLowerCase().includes(q));
+  filtered = [...filtered].sort((a, b) => {
+    if (sort === "stock_asc") return (a.storeStock ?? Infinity) - (b.storeStock ?? Infinity) || a.title.localeCompare(b.title);
+    if (sort === "stock_desc") return (b.storeStock ?? -1) - (a.storeStock ?? -1) || a.title.localeCompare(b.title);
+    if (sort === "title") return a.title.localeCompare(b.title);
+    return STATUS_ORDER[a.status]! - STATUS_ORDER[b.status]! || a.title.localeCompare(b.title);
+  });
+  const total = filtered.length;
+  const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const urlParams: Record<string, string | undefined> = { store: store.id, q: params.q, status, sort, pageSize: params.pageSize };
 
   return (
     <AppShell store={store} active="/stock">
-      <h1 className="page-title">Stock Intelligence</h1>
-      <p className="page-subtitle" style={{ marginBottom: 18 }}>Jours de stock estimés = stock actuel ÷ vitesse moyenne de vente (30 derniers jours).</p>
-
-      <div className="grid grid-4" style={{ marginBottom: 20 }}>
-        <MetricCard label="Ruptures" value={anyData ? String(summary.rupture) : null} />
-        <MetricCard label="Rupture imminente" value={anyData ? String(summary.ruptureImminente) : null} />
-        <MetricCard label="Stock faible" value={anyData ? String(summary.stockFaible) : null} />
-        <MetricCard label="Incohérences fournisseur" value={anyData ? String(summary.supplierMismatch) : null} />
+      <div className="topbar">
+        <div>
+          <h1 className="page-title">Stock Intelligence</h1>
+          <p className="page-subtitle">
+            Jours de stock = stock actuel ÷ vitesse moyenne de vente (30 derniers jours calendaires). Stock lu dans Shopify ; statuts calculés, jamais
+            estimés au jugé.
+          </p>
+        </div>
       </div>
 
-      <div className="card" style={{ marginBottom: 20 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>🔴 Critique — à traiter en priorité</h2>
-        {critical.length === 0 ? (
-          <p className="unavailable-note">Aucun produit en situation critique.</p>
-        ) : (
-          <StockTable rows={critical} />
-        )}
+      <div className="stat-strip" role="list">
+        <StatTile label="Variantes suivies" value={anyData ? analyses.length.toLocaleString("fr-FR") : "—"} tag="real" />
+        <StatTile label="Situations critiques" value={anyData ? criticalCount.toLocaleString("fr-FR") : "—"} tag="calculated" tone={criticalCount > 0 ? "danger" : undefined} />
+        <StatTile label="Ruptures" value={anyData ? summary.rupture.toLocaleString("fr-FR") : "—"} tag="real" />
+        <StatTile label="Rupture imminente" value={anyData ? String(summary.ruptureImminente) : "—"} tag="calculated" />
+        <StatTile label="Vélocité inconnue" value={anyData ? summary.inconnu.toLocaleString("fr-FR") : "—"} tag="unavailable" hint="Aucune vente sur 30 jours connue" />
       </div>
 
-      <div className="card">
-        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Tous les produits</h2>
-        {rest.length === 0 ? <p className="unavailable-note">Aucune donnée de stock synchronisée.</p> : <StockTable rows={rest} />}
+      <div className="card card-table">
+        <TableControls
+          params={urlParams}
+          searchPlaceholder="Rechercher un produit, une variante, un SKU"
+          filters={[{ key: "status", label: "Statut", value: status, options: STATUS_OPTIONS }]}
+          sort={{ key: "sort", label: "Tri", value: sort, options: SORT_OPTIONS }}
+        />
+        <div className="table-scroll">
+          <table className="table table-compact">
+            <thead>
+              <tr>
+                <th>Produit / variante</th>
+                <th>SKU</th>
+                <th className="num">
+                  Stock <DataTag status="real" compact />
+                </th>
+                <th className="num">Stock fournisseur</th>
+                <th className="num">
+                  Jours de stock <DataTag status="calculated" compact />
+                </th>
+                <th>Statut</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="unavailable-note" style={{ padding: 24, textAlign: "center" }}>
+                    Aucune variante ne correspond à ces critères.
+                  </td>
+                </tr>
+              )}
+              {rows.map((r) => (
+                <tr key={r.variantId}>
+                  <td className="cell-title">{r.title}</td>
+                  <td className="cell-sub">{r.sku ?? "—"}</td>
+                  <td className="num">{r.storeStock ?? <span className="unavailable-note">n/d</span>}</td>
+                  <td className="num">{r.supplierStock ?? <span className="unavailable-note">n/d</span>}</td>
+                  <td className="num">{r.daysOfStock !== null ? Math.round(r.daysOfStock) : <span className="unavailable-note">n/d</span>}</td>
+                  <td>
+                    <span className={`badge ${STATUS_META[r.status]!.cls}`}>{STATUS_META[r.status]!.label}</span>
+                    {r.supplierMismatch && <span className="badge badge-urgent" style={{ marginLeft: 4 }}>Fournisseur dispo</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Pagination total={total} page={page} pageSize={pageSize} params={urlParams} label="variantes" />
       </div>
     </AppShell>
   );
 }
 
-function StockTable({ rows }: { rows: ReturnType<typeof analyzeStock>[] }) {
+function StatTile({ label, value, tag, hint, tone }: { label: string; value: string; tag: "real" | "calculated" | "estimated" | "unavailable"; hint?: string; tone?: "danger" | "warning" }) {
   return (
-    <table className="table">
-      <thead>
-        <tr><th>Produit</th><th>SKU</th><th>Stock</th><th>Stock fournisseur</th><th>Jours de stock</th><th>Statut</th></tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.variantId}>
-            <td>{r.title}</td>
-            <td>{r.sku ?? "—"}</td>
-            <td>{r.storeStock ?? <span className="unavailable-note">n/d</span>}</td>
-            <td>{r.supplierStock ?? <span className="unavailable-note">n/d</span>}</td>
-            <td>{r.daysOfStock !== null ? Math.round(r.daysOfStock) : <span className="unavailable-note">n/d</span>}</td>
-            <td><span className={`badge ${STATUS_META[r.status]!.cls}`}>{STATUS_META[r.status]!.label}</span></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className={`stat-tile${tone ? ` stat-tile-${tone}` : ""}`} role="listitem">
+      <div className="stat-tile-label">
+        {label} <DataTag status={tag} compact />
+      </div>
+      <div className="stat-tile-value">{value}</div>
+      {hint && <div className="stat-tile-hint">{hint}</div>}
+    </div>
   );
 }

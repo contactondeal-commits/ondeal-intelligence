@@ -28,6 +28,9 @@ export interface StockAnalysis {
   lastSyncedAt: Nullable<string>;
 }
 
+/** Statut de fiabilité d'une valeur affichée — jamais implicite. */
+export type DataStatus = "real" | "calculated" | "estimated" | "unavailable";
+
 export interface MarginAnalysis {
   productId: string;
   variantId: string;
@@ -38,9 +41,28 @@ export interface MarginAnalysis {
   paymentFees: Nullable<number>;
   otherFixedCost: Nullable<number>;
   totalCost: Nullable<number>;
+  /** Marge complète = prix − (coût fournisseur + transport + frais de paiement + autres). Requiert les hypothèses. */
   margin: Nullable<number>;
   marginRate: Nullable<number>; // 0-1
   missingAssumptions: string[]; // ex: ["supplierCost", "shippingCost"]
+  /**
+   * MARGE BRUTE = prix − coût fournisseur uniquement (avant transport et
+   * frais). Calculable dès que prix et coût sont connus. Ce n'est PAS une
+   * marge nette et ne doit jamais être présentée comme telle.
+   */
+  grossMargin: Nullable<number>;
+  grossMarginRate: Nullable<number>; // 0-1
+  /** Provenance du coût fournisseur utilisé (Shopify réel / hypothèse OnDeal / indisponible). */
+  supplierCostSource: "shopify_unit_cost" | "cost_assumption" | "unavailable";
+  /** Statut de chaque valeur : REAL (Shopify), CALCULATED (dérivée), ESTIMATED (hypothèse), UNAVAILABLE. */
+  status: {
+    sellingPrice: DataStatus;
+    supplierCost: DataStatus;
+    shippingCost: DataStatus;
+    paymentFees: DataStatus;
+    grossMargin: DataStatus;
+    margin: DataStatus;
+  };
 }
 
 export interface ScoreFactor {

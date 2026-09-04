@@ -9,6 +9,13 @@ export interface MarginInput {
   shippingCost: Nullable<number>;
   paymentFeesRate: Nullable<number>; // ex 0.029
   otherFixedCost: Nullable<number>;
+  /**
+   * Provenance du coût fournisseur (voir costs.ts). Optionnelle pour rester
+   * compatible avec les appels existants : absente, un coût fourni est
+   * considéré comme une hypothèse OnDeal (comportement historique), jamais
+   * comme un coût Shopify réel.
+   */
+  supplierCostSource?: "shopify_unit_cost" | "cost_assumption" | "unavailable";
 }
 
 /**
@@ -16,6 +23,12 @@ export interface MarginInput {
  * listée dans `missingAssumptions` et fait retomber `margin`/`marginRate` à
  * `null` plutôt que de supposer un coût à 0 (ce qui gonflerait faussement la
  * marge affichée).
+ *
+ * Vertical slice 03/09/2026 : ajoute la MARGE BRUTE (prix − coût
+ * fournisseur, avant transport et frais), calculable dès que le coût réel
+ * Shopify est connu, et le statut REAL / CALCULATED / ESTIMATED /
+ * UNAVAILABLE de chaque valeur. Même fonction, mêmes formules : ANALYSE =
+ * SIMULATION reste garanti.
  */
 export function analyzeMargin(input: MarginInput): MarginAnalysis {
   const missing: string[] = [];
@@ -49,6 +62,15 @@ export function analyzeMargin(input: MarginInput): MarginAnalysis {
       ? margin / input.sellingPrice
       : null;
 
+  // Marge brute : prix − coût fournisseur, sans aucune hypothèse.
+  const grossMargin =
+    input.sellingPrice !== null && input.supplierCost !== null ? input.sellingPrice - input.supplierCost : null;
+  const grossMarginRate =
+    grossMargin !== null && input.sellingPrice !== null && input.sellingPrice > 0 ? grossMargin / input.sellingPrice : null;
+
+  const supplierCostSource =
+    input.supplierCostSource ?? (input.supplierCost !== null ? "cost_assumption" : "unavailable");
+
   return {
     productId: input.productId,
     variantId: input.variantId,
@@ -62,6 +84,31 @@ export function analyzeMargin(input: MarginInput): MarginAnalysis {
     margin,
     marginRate,
     missingAssumptions: missing,
+    grossMargin,
+    grossMarginRate,
+    supplierCostSource,
+    status: {
+      sellingPrice: input.sellingPrice !== null ? "real" : "unavailable",
+      supplierCost:
+        input.supplierCost === null ? "unavailable" : supplierCostSource === "shopify_unit_cost" ? "real" : "estimated",
+      shippingCost: input.shippingCost !== null ? "estimated" : "unavailable",
+      paymentFees: paymentFees !== null ? "estimated" : "unavailable",
+      grossMargin: grossMargin !== null ? "calculated" : "unavailable",
+      margin: margin !== null ? "calculated" : "unavailable",
+    },
+  };
+}
+
+export function summarizeGrossMargin(analyses: MarginAnalysis[]) {
+  const computed = analyses.filter((a) => a.grossMarginRate !== null);
+  return {
+    total: analyses.length,
+    withRealCost: analyses.filter((a) => a.supplierCostSource === "shopify_unit_cost").length,
+    withFallbackCost: analyses.filter((a) => a.supplierCostSource === "cost_assumption").length,
+    withoutCost: analyses.filter((a) => a.supplierCostSource === "unavailable").length,
+    grossNegative: computed.filter((a) => (a.grossMargin as number) < 0).length,
+    grossFaible: computed.filter((a) => (a.grossMarginRate as number) >= 0 && (a.grossMarginRate as number) < MARGIN_THRESHOLDS.faibleRate).length,
+    averageGrossRate: computed.length > 0 ? computed.reduce((s, a) => s + (a.grossMarginRate as number), 0) / computed.length : null,
   };
 }
 

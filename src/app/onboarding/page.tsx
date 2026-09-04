@@ -70,11 +70,11 @@ export default function OnboardingPage() {
             {error && <div className="callout callout-error">{error}</div>}
             <div className="field">
               <label>Nom de la boutique</label>
-              <input className="input" placeholder="ex. OnDeal.fr" value={storeName} onChange={(e) => setStoreName(e.target.value)} />
+              <input className="input" name="storeName" placeholder="ex. OnDeal.fr" value={storeName} onChange={(e) => setStoreName(e.target.value)} />
             </div>
             <div className="field">
               <label>Domaine Shopify (optionnel à ce stade)</label>
-              <input className="input" placeholder="ex. ondeal.myshopify.com" value={domain} onChange={(e) => setDomain(e.target.value)} />
+              <input className="input" name="domain" placeholder="ex. ondeal.myshopify.com" value={domain} onChange={(e) => setDomain(e.target.value)} />
             </div>
             <button className="btn btn-primary" style={{ width: "100%" }} disabled={loading || !storeName} onClick={createRealStore}>
               {loading ? "Création…" : "Créer ma boutique"}

@@ -47,3 +47,24 @@ réelles. Le code de chaque connecteur est complet et fonctionnel ; il n'a pas p
 API Shopify/Judge.me d'OnDeal.fr faute d'identifiants dans cette session — il a en revanche été exercé de
 bout en bout via le Mode Démo, qui utilise exactement le même moteur d'intelligence et la même chaîne
 Prisma que les données réelles, seule la source (Shopify/Judge.me vs. jeu de données fictif) diffère.
+
+## Import bulk Shopify (lecture seule) — 03/09/2026
+
+Pour un gros catalogue, Shopify recommande les *bulk operations* (`bulkOperationRunQuery`), qui produisent
+un fichier JSONL téléchargeable. `scripts/ingest-shopify-bulk.ts` ingère ces fichiers (produits +
+variantes, commandes + lignes) en réutilisant **exactement** l'étape STORE de la synchronisation live
+(`src/lib/sync/shopifyStore.ts`) : même normalisation, mêmes upserts, mêmes clés d'unicité. Il n'écrit
+jamais vers Shopify et refuse une boutique de démonstration. Chaque import laisse un `SyncRun`
+(`triggeredBy: "bulk_import"`) avec `statsJson` (comptes détaillés, coûts unitaires présents/absents,
+signalements qualité, durées par étape).
+
+Le connecteur live lit désormais : pagination complète des variantes (`variants(first: 100)` + continuation
+par produit), pagination complète des lignes de commande, `inventoryItem.unitCost` par variante (coût réel
+Shopify, stocké dans `Variant.unitCost` — distinct des `CostAssumption` saisies dans OnDeal), et les
+commandes comme entités (`Order`/`OrderLine` : annulation, statut financier, total, remboursé, variante par
+ligne). `SalesSnapshot` est dérivé de ces lignes (commandes annulées exclues, remboursements non déduits).
+
+Validation du 03/09/2026 sur la boutique réelle (1 730 produits, 16 407 variantes) : voir le rapport de
+session dans le projet. Le chemin live (jeton Admin API) n'a pas été exécuté à plein volume — il exige que le
+marchand saisisse lui-même son jeton dans Settings › Intégrations ; ses requêtes GraphQL ont été validées
+contre le schéma Shopify et exécutées sur une petite page réelle.
