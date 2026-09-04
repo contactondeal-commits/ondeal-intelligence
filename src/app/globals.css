@@ -1872,6 +1872,9 @@ table.table-products td .cell-sub { margin-top: 1px; }
 .split-fill-reviews { background: var(--color-warning); }
 .split-fill-content { background: var(--color-info); }
 .split-fill-data_quality { background: var(--color-success); }
+.split-fill-urgent { background: var(--color-danger); }
+.split-fill-opportunity { background: var(--color-warning); }
+.split-fill-suggestion { background: var(--color-success); }
 .rail-filters { display: flex; flex-direction: column; gap: 8px; }
 .rail-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .rail-chip { font-size: var(--text-2xs); font-weight: var(--font-semibold); padding: 5px 9px; border-radius: var(--radius-pill); border: 1px solid var(--color-border); color: var(--color-text-muted); }

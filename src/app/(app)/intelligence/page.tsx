@@ -9,6 +9,7 @@ import DataTag from "@/components/ui/DataTag";
 import { parsePageParams, withParams } from "@/lib/pagination";
 import { groupRecommendations, countBySeverity, type GroupableRecommendation, type RecommendationGroup } from "@/lib/intelligence/group";
 import { lightenGroup } from "@/lib/intelligence/groupTransport";
+import { computeActionReliability, type ReliabilityCountRow, type ReliabilitySeverity } from "@/lib/intelligence/reliability";
 
 const CATEGORY_LABEL: Record<string, string> = {
   margin: "Marge",
@@ -19,6 +20,11 @@ const CATEGORY_LABEL: Record<string, string> = {
   marketing: "Marketing",
 };
 const CATEGORY_OPTIONS = [{ value: "all", label: "Toutes les catégories" }, ...Object.entries(CATEGORY_LABEL).map(([value, label]) => ({ value, label }))];
+const RELIABILITY_SEVERITIES: Array<{ key: ReliabilitySeverity; label: string }> = [
+  { key: "URGENT", label: "Risques (urgent)" },
+  { key: "OPPORTUNITY", label: "Opportunités" },
+  { key: "SUGGESTION", label: "Recommandations" },
+];
 const SEVERITY_OPTIONS = [
   { value: "all", label: "Toutes les sévérités" },
   { value: "urgent", label: "Risques (urgent)" },
@@ -48,6 +54,15 @@ export default async function IntelligencePage({ searchParams }: { searchParams:
     include: { product: { select: { id: true, title: true } } },
     orderBy: [{ severity: "asc" }, { confidence: "desc" }],
   });
+
+  const reliabilityRows = await prisma.recommendation.groupBy({
+    by: ["severity", "status"],
+    where: { storeId: store.id, status: { in: ["ACTIONED", "DISMISSED"] } },
+    _count: { _all: true },
+  });
+  const reliability = computeActionReliability(
+    reliabilityRows.map((r) => ({ severity: r.severity as ReliabilitySeverity, status: r.status as "ACTIONED" | "DISMISSED", count: r._count._all })) as ReliabilityCountRow[],
+  );
 
   const counts = countBySeverity(recommendations);
   const allGroups = groupRecommendations(recommendations);
@@ -160,6 +175,52 @@ export default async function IntelligencePage({ searchParams }: { searchParams:
               <DataTag status="unavailable" compact /> Aucun impact en euros n&apos;est estimé : le volume de ventes ne le permet pas encore.
             </p>
           </section>
+
+          <section className="card cc-card" aria-labelledby="intel-reliability">
+            <h2 id="intel-reliability" className="cc-card-title">
+              Fiabilité des signaux
+            </h2>
+            {reliability.overall.decided === 0 ? (
+              <p className="unavailable-note">Aucune décision (action ou rejet) prise pour l&apos;instant — le taux d&apos;action n&apos;est pas encore mesurable.</p>
+            ) : (
+              <>
+                <div className="split-head" style={{ marginBottom: 4 }}>
+                  <span>Taux d&apos;action global</span>
+                  <span>{Math.round((reliability.overall.actionRate ?? 0) * 100)} %</span>
+                </div>
+                <p className="cell-sub" style={{ marginBottom: 10 }}>
+                  {reliability.overall.actioned.toLocaleString("fr-FR")} actionnée{reliability.overall.actioned > 1 ? "s" : ""} sur{" "}
+                  {reliability.overall.decided.toLocaleString("fr-FR")} décidée{reliability.overall.decided > 1 ? "s" : ""} ({reliability.overall.dismissed.toLocaleString("fr-FR")} rejetée
+                  {reliability.overall.dismissed > 1 ? "s" : ""}).
+                </p>
+                <ul className="split-list">
+                  {RELIABILITY_SEVERITIES.map(({ key, label }) => {
+                    const b = reliability.bySeverity[key];
+                    return (
+                      <li key={key} className="split-item">
+                        <div className="split-head">
+                          <span>{label}</span>
+                          <span>
+                            {b.actionRate === null ? "—" : `${Math.round(b.actionRate * 100)} %`}{" "}
+                            <span className="cell-sub">({b.decided.toLocaleString("fr-FR")} décidée{b.decided > 1 ? "s" : ""})</span>
+                          </span>
+                        </div>
+                        {b.decided > 0 && (
+                          <div className="split-bar" aria-hidden="true">
+                            <span className={`split-fill split-fill-${key.toLowerCase()}`} style={{ width: `${(b.actionRate ?? 0) * 100}%` }} />
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </>
+            )}
+            <p className="cell-sub">
+              <DataTag status="real" compact /> Sur l&apos;historique réel des décisions déjà prises (actionnées vs rejetées). Les signaux actuellement ouverts n&apos;y sont volontairement pas mélangés : ils sont régénérés à chaque synchronisation et ne représentent pas une décision.
+            </p>
+          </section>
+
           <section className="card cc-card" aria-labelledby="intel-filters">
             <h2 id="intel-filters" className="cc-card-title">
               Filtres
