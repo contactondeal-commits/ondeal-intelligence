@@ -20,6 +20,12 @@ function getSecret(): Uint8Array {
 export interface SessionPayload {
   userId: string;
   email: string;
+  // Renseigné uniquement pour une session ouverte depuis l'app embarquée
+  // (App Bridge) — domaine *.myshopify.com de la boutique. Utilisé par le
+  // middleware pour autoriser dynamiquement le framing (CSP frame-ancestors)
+  // sur ce domaine précis, jamais plus large. Absent pour une session web
+  // classique (login autonome).
+  embeddedShop?: string;
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -38,12 +44,17 @@ export async function createSession(payload: SessionPayload): Promise<string> {
     .sign(getSecret());
 }
 
-export async function setSessionCookie(token: string): Promise<void> {
+export async function setSessionCookie(token: string, opts?: { sameSite?: "lax" | "none" }): Promise<void> {
+  const sameSite = opts?.sameSite ?? "lax";
   const store = await cookies();
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    // SameSite=None exige Secure=true (imposé par les navigateurs) — requis
+    // pour que le cookie de session soit envoyé depuis l'iframe admin
+    // Shopify (contexte tiers). Utilisé uniquement pour les sessions
+    // ouvertes via l'app embarquée (voir /api/shopify/session-token-exchange).
+    secure: process.env.NODE_ENV === "production" || sameSite === "none",
+    sameSite,
     path: "/",
     maxAge: SESSION_TTL_SECONDS,
   });
@@ -61,7 +72,11 @@ export async function getSession(): Promise<SessionPayload | null> {
   try {
     const { payload } = await jwtVerify(token, getSecret(), { algorithms: ["HS256"] });
     if (typeof payload.userId !== "string" || typeof payload.email !== "string") return null;
-    return { userId: payload.userId, email: payload.email };
+    return {
+      userId: payload.userId,
+      email: payload.email,
+      embeddedShop: typeof payload.embeddedShop === "string" ? payload.embeddedShop : undefined,
+    };
   } catch {
     return null;
   }

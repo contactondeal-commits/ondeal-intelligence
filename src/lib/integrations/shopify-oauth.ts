@@ -10,9 +10,14 @@ import { ShopifyApiError, type ShopifyCredentials } from "@/lib/integrations/sho
 // jamais vue en clair par un tiers.
 // ============================================================================
 
-// Scopes strictement alignés sur ce que src/lib/integrations/shopify.ts lit
-// réellement (produits, stock, commandes) — jamais un scope large "au cas où".
-export const SHOPIFY_OAUTH_SCOPES = "read_products,read_inventory,read_orders";
+// Scopes alignés sur la configuration RÉELLEMENT déclarée pour cette app
+// dans le Partner Dashboard Shopify (version active "ondeal-intelligence-2",
+// vérifiée le 04/09/2026) — un écart entre le scope demandé ici et le scope
+// déclaré côté Shopify peut faire échouer l'autorisation pour une app
+// embarquée en installation gérée par Shopify. À ne modifier ICI qu'après
+// avoir d'abord modifié la config Shopify elle-même (shopify.app.toml +
+// `shopify app deploy`, hors périmètre de ce dépôt) — jamais l'inverse.
+export const SHOPIFY_OAUTH_SCOPES = "read_products,write_products,read_inventory,write_inventory,read_orders";
 const OAUTH_STATE_TTL_SECONDS = 600; // 10 minutes
 const API_VERSION = "2025-01";
 
