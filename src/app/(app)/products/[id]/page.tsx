@@ -2,6 +2,7 @@ import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import MetricCard from "@/components/MetricCard";
+import BackButton from "@/components/BackButton";
 import { notFound } from "next/navigation";
 
 export default async function ProductDetailPage({
@@ -39,6 +40,7 @@ export default async function ProductDetailPage({
     <AppShell store={store} active="/products">
       <div className="topbar">
         <div>
+          <BackButton fallbackHref={`/products?store=${store.id}`} label="Retour aux produits" />
           <h1 className="page-title">{product.title}</h1>
           <p className="page-subtitle">{product.productType ?? "Catégorie non renseignée"} · statut Shopify : {product.status}</p>
         </div>

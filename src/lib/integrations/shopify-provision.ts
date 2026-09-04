@@ -82,3 +82,53 @@ export async function provisionStoreFromShopifyAuth(params: {
 
   return { storeId: store.id, userId: user.id, userEmail: user.email };
 }
+
+/**
+ * Connecte Shopify (OAuth) à une boutique OnDeal DÉJÀ EXISTANTE, sans créer
+ * de nouvelle Organization/Store ni toucher la session en cours (04/09/2026
+ * — chemin "Connecter via Shopify" depuis Paramètres > Intégrations, pour un
+ * compte créé manuellement). Distincte de provisionStoreFromShopifyAuth,
+ * qui retrouve/crée par domaine + bascule la session sur l'e-mail Shopify :
+ * inadapté ici, ça aurait déconnecté le marchand de son propre compte.
+ * L'accès à `storeId` doit avoir déjà été vérifié par l'appelant
+ * (requireStoreAccess) — cette fonction ne revérifie pas l'autorisation.
+ */
+export async function attachShopifyToExistingStore(params: {
+  storeId: string;
+  userId: string;
+  shop: string;
+  creds: ShopifyCredentials;
+  scope: string;
+}): Promise<void> {
+  const { storeId, userId, shop, creds, scope } = params;
+
+  const store = await prisma.store.findUnique({ where: { id: storeId } });
+  if (!store) throw new Error("Boutique OnDeal introuvable.");
+
+  // Un autre Store ne doit jamais déjà revendiquer ce domaine Shopify —
+  // éviterait de mélanger silencieusement l'historique de deux boutiques.
+  const conflict = await prisma.store.findFirst({ where: { domain: shop, NOT: { id: storeId } } });
+  if (conflict) {
+    throw new Error(
+      `${shop} est déjà connectée à une autre boutique OnDeal (${conflict.name}). Déconnectez-la d'abord si vous voulez la reconnecter ici.`,
+    );
+  }
+
+  await prisma.store.update({ where: { id: storeId }, data: { domain: shop, shopifyGrantedScope: scope } });
+
+  await prisma.integration.upsert({
+    where: { storeId_provider: { storeId, provider: "SHOPIFY" } },
+    create: { storeId, provider: "SHOPIFY", status: "CONNECTED", encryptedCredentials: encryptJson(creds) },
+    update: { status: "CONNECTED", encryptedCredentials: encryptJson(creds), lastError: null },
+  });
+
+  await registerMandatoryWebhooks(creds, storeId);
+
+  await logAudit({
+    storeId,
+    userId,
+    actorType: "user",
+    event: "integration.oauth_installed",
+    message: `Boutique Shopify ${shop} connectée via OAuth (compte existant).`,
+  });
+}

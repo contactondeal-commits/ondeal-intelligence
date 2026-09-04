@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSession, setSessionCookie } from "@/lib/auth";
+import { createSession, setSessionCookie, requireStoreAccess, AuthError } from "@/lib/auth";
 import { normalizeMyshopifyDomain } from "@/lib/integrations/shopify-domain";
 import type { ShopifyCredentials } from "@/lib/integrations/shopify";
 import {
@@ -8,14 +8,26 @@ import {
   exchangeCodeForAccessToken,
   fetchShopInfo,
 } from "@/lib/integrations/shopify-oauth";
-import { provisionStoreFromShopifyAuth } from "@/lib/integrations/shopify-provision";
+import { provisionStoreFromShopifyAuth, attachShopifyToExistingStore } from "@/lib/integrations/shopify-provision";
 
-// COMMERCIALISATION — retour d'autorisation Shopify. Crée ou retrouve
-// l'Organization/Store correspondant à la boutique, connecte l'intégration
-// Shopify, enregistre les webhooks obligatoires, puis ouvre une session pour
-// le marchand. AUCUNE valeur n'est inventée : en cas d'échec à n'importe
-// quelle étape, l'installation est refusée avec un message clair plutôt que
-// de créer un état partiel silencieux.
+// COMMERCIALISATION — retour d'autorisation Shopify. Deux chemins, selon que
+// l'état signé porte un `linkStoreId` (voir /api/shopify/install) :
+//
+//   1. SANS linkStoreId (installation depuis Shopify / App Store, chemin
+//      d'origine, INCHANGÉ) — crée ou retrouve l'Organization/Store par
+//      domaine, ouvre une session pour le marchand, ré-intègre l'iframe
+//      Shopify. C'est le chemin déjà vérifié en production ; ne pas altérer
+//      son comportement par défaut.
+//
+//   2. AVEC linkStoreId (marchand déjà connecté à un compte OnDeal existant,
+//      Paramètres > Intégrations, 04/09/2026) — attache Shopify à CETTE
+//      boutique précise, sans provisionner de nouvelle Organization/Store et
+//      SANS toucher à la session en cours : le marchand reste connecté sous
+//      son propre compte.
+//
+// AUCUNE valeur n'est inventée : en cas d'échec à n'importe quelle étape,
+// l'installation est refusée avec un message clair plutôt que de créer un
+// état partiel silencieux.
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const shop = normalizeMyshopifyDomain(params.get("shop"));
@@ -33,9 +45,28 @@ export async function GET(req: NextRequest) {
   }
 
   // 2. État anti-CSRF (émis par /api/shopify/install, à courte durée de vie).
-  if (!(await verifyOAuthState(state, shop))) {
+  const stateResult = await verifyOAuthState(state, shop);
+  if (!stateResult) {
     console.error("[shopify/callback] state invalide ou expiré", { shop });
     return NextResponse.json({ error: "Session d'installation invalide ou expirée. Relancez l'installation." }, { status: 401 });
+  }
+  const { linkStoreId } = stateResult;
+
+  // 2bis. Chemin "attacher à un compte existant" : revérifie l'accès APRÈS
+  // le retour de Shopify (la session en cours a pu changer entre-temps) —
+  // ne fait jamais confiance à la seule présence de linkStoreId dans l'état.
+  let linkUserId: string | undefined;
+  if (linkStoreId) {
+    try {
+      const access = await requireStoreAccess(linkStoreId);
+      linkUserId = access.userId;
+    } catch (err) {
+      const status = err instanceof AuthError ? 403 : 500;
+      return NextResponse.json(
+        { error: "Impossible de rattacher cette boutique Shopify : vous n'êtes plus authentifié·e ou n'avez plus accès à cette boutique OnDeal. Reconnectez-vous puis réessayez depuis Paramètres > Intégrations." },
+        { status },
+      );
+    }
   }
 
   try {
@@ -43,6 +74,15 @@ export async function GET(req: NextRequest) {
     // invalide un code déjà utilisé).
     const { accessToken, scope } = await exchangeCodeForAccessToken(shop, code);
     const creds: ShopifyCredentials = { domain: shop, accessToken };
+
+    if (linkStoreId && linkUserId) {
+      // Chemin "compte existant" — aucune session créée/modifiée ici.
+      await attachShopifyToExistingStore({ storeId: linkStoreId, userId: linkUserId, shop, creds, scope });
+      return NextResponse.redirect(
+        `${req.nextUrl.origin}/settings/integrations?store=${linkStoreId}&connected=shopify`,
+        { status: 302 },
+      );
+    }
 
     // 4. Informations réelles de la boutique (jamais devinées).
     const shopInfo = await fetchShopInfo(creds);
@@ -76,9 +116,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(`https://${shop}/admin/apps/${apiKey}`, { status: 302 });
   } catch (err) {
     console.error("[shopify/callback] échec de l'installation", { shop, error: err instanceof Error ? err.message : String(err) });
-    return NextResponse.json(
-      { error: "L'installation a échoué. Aucune donnée n'a été enregistrée pour cette étape. Réessayez depuis Shopify." },
-      { status: 502 },
-    );
+    const message = linkStoreId && err instanceof Error ? err.message : "L'installation a échoué. Aucune donnée n'a été enregistrée pour cette étape. Réessayez depuis Shopify.";
+    return NextResponse.json({ error: message }, { status: 502 });
   }
 }

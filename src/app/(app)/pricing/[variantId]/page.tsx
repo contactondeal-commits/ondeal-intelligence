@@ -4,6 +4,7 @@ import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import FeatureUnavailable from "@/components/FeatureUnavailable";
+import BackButton from "@/components/BackButton";
 import { hasFeature } from "@/lib/plan-limits";
 import DataTag from "@/components/ui/DataTag";
 import DecisionCard from "@/components/DecisionCard";
@@ -128,6 +129,7 @@ export default async function VariantWorkspacePage({
     <AppShell store={store} active="/pricing">
       <div className="topbar">
         <div>
+          <BackButton fallbackHref={`/pricing?store=${store.id}`} />
           <div className="breadcrumb">
             <Link href={`/pricing?store=${store.id}`}>Prix & Marge</Link> <span aria-hidden="true">/</span> <span>{variant.product.title}</span>
           </div>

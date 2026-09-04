@@ -48,21 +48,30 @@ function getStateSecret(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-/** Jeton d'état signé, à courte durée de vie — protection CSRF du callback OAuth. */
-export async function signOAuthState(shop: string): Promise<string> {
-  return new SignJWT({ shop, nonce: crypto.randomBytes(16).toString("hex") })
+/**
+ * Jeton d'état signé, à courte durée de vie — protection CSRF du callback
+ * OAuth. `linkStoreId`, quand fourni, indique que cette installation doit
+ * s'attacher à une boutique OnDeal déjà existante (marchand déjà connecté,
+ * Paramètres > Intégrations) plutôt que de provisionner une nouvelle
+ * Organization/Store — voir /api/shopify/install (vérifie l'accès AVANT de
+ * signer) et /api/shopify/callback (revérifie l'accès APRÈS le retour).
+ */
+export async function signOAuthState(shop: string, linkStoreId?: string): Promise<string> {
+  return new SignJWT({ shop, nonce: crypto.randomBytes(16).toString("hex"), ...(linkStoreId ? { linkStoreId } : {}) })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${OAUTH_STATE_TTL_SECONDS}s`)
     .sign(getStateSecret());
 }
 
-export async function verifyOAuthState(token: string, expectedShop: string): Promise<boolean> {
+/** Retourne l'état décodé si valide pour `expectedShop`, sinon `null`. */
+export async function verifyOAuthState(token: string, expectedShop: string): Promise<{ linkStoreId?: string } | null> {
   try {
     const { payload } = await jwtVerify(token, getStateSecret(), { algorithms: ["HS256"] });
-    return payload.shop === expectedShop;
+    if (payload.shop !== expectedShop) return null;
+    return { linkStoreId: typeof payload.linkStoreId === "string" ? payload.linkStoreId : undefined };
   } catch {
-    return false;
+    return null;
   }
 }
 
