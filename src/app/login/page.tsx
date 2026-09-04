@@ -10,27 +10,27 @@ const FEATURES = [
   {
     icon: Package,
     title: "Stock Intelligence",
-    text: "Anticipez les ruptures avant qu'elles ne coûtent des ventes, sur toute votre boutique Shopify, WooCommerce ou PrestaShop.",
+    text: "Anticipez les ruptures avant qu'elles ne bloquent vos ventes. Chaque alerte est groupée par produit, triée par impact réel.",
   },
   {
     icon: Star,
     title: "Review Intelligence",
-    text: "Transformez vos avis Judge.me en décisions produit, sans devoir tous les lire un par un.",
+    text: "Transformez vos avis Judge.me en décisions produit concrètes, sans devoir tous les lire un par un.",
   },
   {
     icon: TrendingUp,
-    title: "Prix & marge",
-    text: "Protégez votre marge réelle et repérez les opportunités de prix, produit par produit.",
+    title: "Prix & Marge",
+    text: "Repérez en temps réel les produits qui vous font perdre de l'argent et agissez en un clic.",
   },
   {
     icon: Sparkles,
     title: "OnDeal AI",
-    text: "Gagnez du temps : une question en langage naturel, une réponse fondée sur vos vraies données.",
+    text: "Posez une question sur votre boutique, obtenez une réponse fondée sur vos vraies données — pas des estimations.",
   },
   {
     icon: ShieldCheck,
-    title: "Vous gardez le contrôle",
-    text: "Aucune action n'est jamais exécutée sur votre boutique sans votre validation explicite.",
+    title: "Vous gardez toujours le contrôle",
+    text: "Aucune modification n'est jamais appliquée sur votre boutique sans votre validation explicite.",
   },
 ];
 
@@ -70,11 +70,17 @@ export default function LoginPage() {
             </span>
             <p className="auth-marketing-kicker">OnDeal Intelligence</p>
           </div>
-          <h1 className="auth-marketing-title">Le copilote qui repère les problèmes de votre boutique avant vous</h1>
+          <h1 className="auth-marketing-title">
+            Détectez les problèmes de votre boutique
+            <br />
+            <span className="auth-marketing-title-accent">avant qu&apos;ils vous coûtent de l&apos;argent.</span>
+          </h1>
           <p className="auth-marketing-lead">
-            Stock, avis, prix et marge : OnDeal Intelligence transforme les données réelles de votre boutique
-            (Shopify, WooCommerce ou PrestaShop) en signaux clairs et en décisions — jamais en actions automatiques
-            non confirmées.
+            Votre boutique génère des milliers de signaux chaque jour.
+            <br />
+            OnDeal Intelligence les transforme en décisions prioritaires claires —
+            <br />
+            et vous dit exactement quoi faire, sans jamais agir sans votre confirmation.
           </p>
           <ul className="auth-feature-list">
             {FEATURES.map((f) => (
@@ -89,9 +95,12 @@ export default function LoginPage() {
               </li>
             ))}
           </ul>
+          <p className="auth-social-proof">
+            Déjà en production · +1&nbsp;700 produits analysés · Données Shopify en temps réel
+          </p>
           <div className="auth-plan-teaser">
-            <span className="badge badge-suggestion">Starter gratuit</span>
-            <span className="auth-plan-teaser-text">Sans carte bancaire pour démarrer — évoluez vers PRO (14,90&nbsp;€/mois) quand vous en avez besoin.</span>
+            <span className="badge badge-suggestion" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>Starter gratuit</span>
+            <span className="auth-plan-teaser-text">Sans carte bancaire pour démarrer. Une version payante existe pour qui en ressent le besoin — jamais imposée.</span>
           </div>
         </section>
 
@@ -109,11 +118,11 @@ export default function LoginPage() {
               <input className="input" name="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
             <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: "100%", marginTop: 8 }}>
-              {loading ? "Connexion…" : "Se connecter"}
+              {loading ? "Connexion…" : "Accéder à mon tableau de bord →"}
             </button>
           </form>
           <p style={{ fontSize: 13.5, marginTop: 18, textAlign: "center", color: "var(--color-text-muted)" }}>
-            Pas encore de compte ? <Link href="/signup" style={{ color: "var(--color-primary-dark)", fontWeight: 700 }}>Créer un compte</Link>
+            Pas encore de compte ? <Link href="/signup" style={{ color: "var(--color-primary-dark)", fontWeight: 700 }}>Demander un accès</Link>
           </p>
         </div>
       </div>
