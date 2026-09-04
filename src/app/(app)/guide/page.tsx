@@ -32,7 +32,7 @@ const MODULES: Array<{ icon: typeof BrainCircuit; title: string; href: string; t
     icon: Truck,
     title: "Stock",
     href: "/stock",
-    text: "Ruptures et risques de rupture, calculés à partir des niveaux de stock réels synchronisés depuis Shopify.",
+    text: "Ruptures et risques de rupture, calculés à partir des niveaux de stock réels synchronisés depuis votre catalogue (Shopify, WooCommerce ou PrestaShop).",
   },
   {
     icon: Star,
@@ -74,7 +74,7 @@ const MODULES: Array<{ icon: typeof BrainCircuit; title: string; href: string; t
     icon: Settings,
     title: "Paramètres",
     href: "/settings",
-    text: "Organisation, boutiques, intégrations (Shopify, Judge.me), équipe, et votre plan.",
+    text: "Organisation, boutiques, intégrations (Shopify, WooCommerce, PrestaShop, Judge.me), équipe, et votre plan.",
   },
 ];
 
@@ -104,8 +104,9 @@ export default async function GuidePage({ searchParams }: { searchParams: Promis
           <Sparkles size={15} aria-hidden="true" /> En une phrase
         </h2>
         <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--color-text)" }}>
-          OnDeal Intelligence lit les données réelles de votre boutique Shopify (produits, stock, commandes, avis) et
-          les transforme en signaux clairs — jamais en actions automatiques : c&apos;est toujours vous qui décidez.
+          OnDeal Intelligence lit les données réelles de votre boutique (Shopify, WooCommerce ou PrestaShop —
+          produits, stock, commandes, avis) et les transforme en signaux clairs — jamais en actions automatiques :
+          c&apos;est toujours vous qui décidez.
         </p>
       </section>
 
@@ -149,8 +150,14 @@ export default async function GuidePage({ searchParams }: { searchParams: Promis
 
       <section className="card cc-card" aria-labelledby="g-connect" style={{ marginBottom: 20 }}>
         <h2 id="g-connect" className="cc-card-title">
-          <Plug size={15} aria-hidden="true" /> Connecter Shopify et Judge.me
+          <Plug size={15} aria-hidden="true" /> Connecter votre catalogue et Judge.me
         </h2>
+
+        <div className="callout callout-info" style={{ marginBottom: 18, fontSize: 12.5 }}>
+          Shopify, WooCommerce et PrestaShop sont des connecteurs <strong>catalogue</strong> — une seule de ces trois
+          intégrations peut être connectée à la fois par boutique. Déconnectez l&apos;une avant d&apos;en connecter
+          une autre depuis <Link href={`/settings/integrations?store=${store.id}`} style={{ color: "inherit", fontWeight: 700 }}>Paramètres → Intégrations</Link>.
+        </div>
 
         <div style={{ marginBottom: 18 }}>
           <h3 style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 6 }}>Shopify</h3>
@@ -189,6 +196,55 @@ export default async function GuidePage({ searchParams }: { searchParams: Promis
             bouton <strong>Connecter via Shopify</strong> ci-dessus, qui ne nécessite aucune application
             personnalisée.
           </div>
+        </div>
+
+        <div style={{ marginBottom: 18 }}>
+          <h3 style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 6 }}>WooCommerce</h3>
+          <p className="cell-sub" style={{ marginBottom: 8 }}>
+            Lecture seule (catalogue, stock, commandes) — les actions d&apos;écriture (prix, stock) restent Shopify
+            uniquement pour l&apos;instant.
+          </p>
+          <ol className="guide-steps">
+            <li>
+              Dans votre admin WordPress : <strong>WooCommerce</strong> → <strong>Réglages</strong> →{" "}
+              <strong>Avancé</strong> → <strong>API REST</strong>.
+            </li>
+            <li>
+              <strong>Ajouter une clé</strong> → autorisations <strong>Lecture</strong> (ou Lecture/Écriture si vous
+              prévoyez des actions futures).
+            </li>
+            <li>
+              La clé et le secret consommateur ne s&apos;affichent qu&apos;une seule fois : copiez-les immédiatement.
+            </li>
+            <li>
+              Dans OnDeal (<Link href={`/settings/integrations?store=${store.id}`} style={{ color: "var(--color-primary-dark)", fontWeight: 700 }}>Paramètres → Intégrations → WooCommerce</Link>) : collez
+              l&apos;adresse de votre site, la clé et le secret consommateur, puis <strong>Connecter</strong>.
+            </li>
+          </ol>
+        </div>
+
+        <div style={{ marginBottom: 18 }}>
+          <h3 style={{ fontSize: 13.5, fontWeight: 800, marginBottom: 6 }}>PrestaShop</h3>
+          <p className="cell-sub" style={{ marginBottom: 8 }}>
+            Lecture seule (catalogue, stock, commandes) — les actions d&apos;écriture (prix, stock) restent Shopify
+            uniquement pour l&apos;instant.
+          </p>
+          <ol className="guide-steps">
+            <li>
+              Dans votre admin PrestaShop : <strong>Paramètres avancés</strong> → <strong>Webservice</strong>.
+            </li>
+            <li>
+              Activez le webservice (s&apos;il ne l&apos;est pas déjà) puis <strong>Ajouter une nouvelle clé</strong>.
+            </li>
+            <li>
+              Cochez au minimum les autorisations GET sur : Products, Combinations, StockAvailables, Orders,
+              OrderDetails, OrderStates, Categories, ProductOptionValues et Currencies.
+            </li>
+            <li>
+              Dans OnDeal (<Link href={`/settings/integrations?store=${store.id}`} style={{ color: "var(--color-primary-dark)", fontWeight: 700 }}>Paramètres → Intégrations → PrestaShop</Link>) : collez
+              l&apos;adresse de votre site et la clé Webservice, puis <strong>Connecter</strong>.
+            </li>
+          </ol>
         </div>
 
         <div>

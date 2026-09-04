@@ -10,7 +10,7 @@ const FEATURES = [
   {
     icon: Package,
     title: "Stock Intelligence",
-    text: "Anticipez les ruptures avant qu'elles ne coûtent des ventes, sur toute votre boutique Shopify.",
+    text: "Anticipez les ruptures avant qu'elles ne coûtent des ventes, sur toute votre boutique Shopify, WooCommerce ou PrestaShop.",
   },
   {
     icon: Star,
@@ -72,8 +72,9 @@ export default function LoginPage() {
           </div>
           <h1 className="auth-marketing-title">Le copilote qui repère les problèmes de votre boutique avant vous</h1>
           <p className="auth-marketing-lead">
-            Stock, avis, prix et marge : OnDeal Intelligence transforme les données réelles de votre boutique Shopify
-            en signaux clairs et en décisions — jamais en actions automatiques non confirmées.
+            Stock, avis, prix et marge : OnDeal Intelligence transforme les données réelles de votre boutique
+            (Shopify, WooCommerce ou PrestaShop) en signaux clairs et en décisions — jamais en actions automatiques
+            non confirmées.
           </p>
           <ul className="auth-feature-list">
             {FEATURES.map((f) => (
