@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Package, Star, TrendingUp, Sparkles, ShieldCheck } from "lucide-react";
+import { Package, Star, TrendingUp, Sparkles, ShieldCheck, Plug } from "lucide-react";
 import LogoMark from "@/components/Logo";
 
 const FEATURES = [
@@ -81,6 +81,10 @@ export default function LoginPage() {
             OnDeal Intelligence les transforme en décisions prioritaires claires —
             <br />
             et vous dit exactement quoi faire, sans jamais agir sans votre confirmation.
+          </p>
+          <p className="auth-compat">
+            <Plug size={13} aria-hidden="true" />
+            Compatible avec <strong>Shopify</strong>, <strong>WooCommerce</strong> et <strong>PrestaShop</strong>
           </p>
           <ul className="auth-feature-list">
             {FEATURES.map((f) => (
