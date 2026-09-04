@@ -75,7 +75,7 @@ export default async function AppShell({
     prisma.user.findUnique({ where: { id: store.userId }, select: { name: true } }),
     prisma.planLimit.findUnique({ where: { plan: store.plan as "STARTER" | "PRO" | "BUSINESS" | "AGENCY" } }),
     prisma.product.count({ where: { storeId: store.id } }),
-    prisma.syncRun.findFirst({ where: { storeId: store.id, provider: "SHOPIFY", status: { in: ["success", "partial"] } }, orderBy: { startedAt: "desc" }, select: { finishedAt: true, triggeredBy: true } }),
+    prisma.syncRun.findFirst({ where: { storeId: store.id, provider: { in: ["SHOPIFY", "WOOCOMMERCE", "PRESTASHOP"] }, status: { in: ["success", "partial"] } }, orderBy: { startedAt: "desc" }, select: { finishedAt: true, triggeredBy: true } }),
   ]);
   const countOf = (s: string) => severities.find((x) => x.severity === s)?._count ?? 0;
   const counts = { urgent: countOf("URGENT"), opportunity: countOf("OPPORTUNITY"), pending: pendingDecisions };
@@ -94,14 +94,14 @@ export default async function AppShell({
 
   const storeStatus = store.isDemo
     ? { label: "Démonstration", tone: "warn" as const }
-    : store.integrations.shopifyConnected
+    : store.integrations.catalogConnected
       ? { label: "Connectée", tone: "ok" as const }
       : { label: "Non connectée", tone: "off" as const };
 
   const syncedAt = store.integrations.lastSyncedAt ?? lastSync?.finishedAt ?? null;
   const syncLabel = store.isDemo
     ? "Données de démonstration"
-    : store.integrations.shopifyConnected
+    : store.integrations.catalogConnected
       ? syncedAt
         ? `Synchronisé ${timeAgo(syncedAt)}`
         : "Jamais synchronisé"
@@ -127,9 +127,9 @@ export default async function AppShell({
       />
       <main className="main">
         <div className="app-header">
-          <CommandBar navItems={FLAT_NAV} storeId={store.id} canSync={!store.isDemo && (store.integrations.shopifyConnected || store.integrations.judgemeConnected)} />
+          <CommandBar navItems={FLAT_NAV} storeId={store.id} canSync={!store.isDemo && (store.integrations.catalogConnected || store.integrations.judgemeConnected)} />
           <div className="header-right">
-            <span className={`sync-status is-${store.isDemo ? "warn" : store.integrations.shopifyConnected ? "ok" : "off"}`} title={syncedAt ? syncedAt.toLocaleString("fr-FR") : undefined}>
+            <span className={`sync-status is-${store.isDemo ? "warn" : store.integrations.catalogConnected ? "ok" : "off"}`} title={syncedAt ? syncedAt.toLocaleString("fr-FR") : undefined}>
               <span className="status-dot" aria-hidden="true" />
               <span className="sync-status-body">
                 <span className="sync-status-label">{syncLabel}</span>

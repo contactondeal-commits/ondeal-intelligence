@@ -10,6 +10,8 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
 
   const shopify = integrations.find((i) => i.provider === "SHOPIFY");
   const judgeme = integrations.find((i) => i.provider === "JUDGEME");
+  const woocommerce = integrations.find((i) => i.provider === "WOOCOMMERCE");
+  const prestashop = integrations.find((i) => i.provider === "PRESTASHOP");
 
   return (
     <AppShell store={store} active="/settings">
@@ -25,6 +27,12 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
           Paramètres.
         </div>
       )}
+
+      <div className="callout callout-info" style={{ marginBottom: 18, fontSize: 12.5 }}>
+        Shopify, WooCommerce et PrestaShop sont des connecteurs <strong>catalogue</strong> — une seule de ces
+        trois intégrations peut être connectée à la fois par boutique. Déconnectez l&apos;une avant d&apos;en
+        connecter une autre.
+      </div>
 
       <div className="grid grid-2">
         <IntegrationCard
@@ -47,6 +55,49 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               (lecture/écriture), Commandes (lecture). Admin Shopify → Paramètres → Applications et canaux de vente
               → Développer des applications → Identifiants API. Marche à suivre détaillée dans le{" "}
               <a href={`/guide?store=${store.id}`} style={{ color: "inherit", fontWeight: 700 }}>Guide</a>.
+            </>
+          }
+        />
+        <IntegrationCard
+          storeId={store.id}
+          provider="WOOCOMMERCE"
+          title="WooCommerce"
+          description="Catalogue, stock, commandes (WordPress)."
+          status={woocommerce?.status ?? "NOT_CONNECTED"}
+          lastError={woocommerce?.lastError ?? null}
+          lastSyncedAt={woocommerce?.lastSyncedAt?.toISOString() ?? null}
+          fields={[
+            { key: "siteUrl", label: "Adresse du site", placeholder: "https://ma-boutique.com" },
+            { key: "consumerKey", label: "Clé consommateur (Consumer key)", placeholder: "ck_xxxxxxxx" },
+            { key: "consumerSecret", label: "Secret consommateur (Consumer secret)", placeholder: "cs_xxxxxxxx", type: "password" },
+          ]}
+          manualHelp={
+            <>
+              WordPress admin → <strong>WooCommerce</strong> → <strong>Réglages</strong> →{" "}
+              <strong>Avancé</strong> → <strong>API REST</strong> → <strong>Ajouter une clé</strong> — autorisations{" "}
+              <strong>Lecture</strong> (ou Lecture/Écriture si vous prévoyez des actions futures). La clé et le
+              secret ne s&apos;affichent qu&apos;une seule fois : copiez-les immédiatement.
+            </>
+          }
+        />
+        <IntegrationCard
+          storeId={store.id}
+          provider="PRESTASHOP"
+          title="PrestaShop"
+          description="Catalogue, stock, commandes."
+          status={prestashop?.status ?? "NOT_CONNECTED"}
+          lastError={prestashop?.lastError ?? null}
+          lastSyncedAt={prestashop?.lastSyncedAt?.toISOString() ?? null}
+          fields={[
+            { key: "siteUrl", label: "Adresse du site", placeholder: "https://ma-boutique.fr" },
+            { key: "apiToken", label: "Clé Webservice", placeholder: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", type: "password" },
+          ]}
+          manualHelp={
+            <>
+              Admin PrestaShop → <strong>Paramètres avancés</strong> → <strong>Webservice</strong> → activez le
+              webservice puis <strong>Ajouter une nouvelle clé</strong> — cochez au minimum les autorisations GET
+              sur Products, Combinations, StockAvailables, Orders, OrderDetails, OrderStates, Categories,
+              ProductOptionValues et Currencies.
             </>
           }
         />

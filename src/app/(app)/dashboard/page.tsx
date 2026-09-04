@@ -107,7 +107,13 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       prisma.auditLog.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, event: true, message: true, createdAt: true } }),
     ]);
 
-  const shopifyConnected = integrations.find((i) => i.provider === "SHOPIFY")?.status === "CONNECTED";
+  // Toute intégration CATALOGUE connectée compte (04/09/2026 — Shopify n'est
+  // plus la seule source de catalogue possible, voir WOOCOMMERCE/PRESTASHOP)
+  // : le bouton "Synchroniser" ne doit jamais rester désactivé à tort pour
+  // une boutique WooCommerce/PrestaShop connectée sans Shopify.
+  const catalogConnected = integrations.some(
+    (i) => (i.provider === "SHOPIFY" || i.provider === "WOOCOMMERCE" || i.provider === "PRESTASHOP") && i.status === "CONNECTED",
+  );
   const judgemeConnected = integrations.find((i) => i.provider === "JUDGEME")?.status === "CONNECTED";
   const firstName = (user?.name ?? "").split(/\s+/)[0] || "";
 
@@ -194,7 +200,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   ];
 
   return (
-    <AppShell store={store} active="/dashboard" headerExtra={!store.isDemo ? <SyncButton storeId={store.id} shopifyConnected={shopifyConnected} judgemeConnected={judgemeConnected} /> : undefined}>
+    <AppShell store={store} active="/dashboard" headerExtra={!store.isDemo ? <SyncButton storeId={store.id} shopifyConnected={catalogConnected} judgemeConnected={judgemeConnected} /> : undefined}>
       <div className="cc-greeting">
         <div>
           <h1 className="cc-title">

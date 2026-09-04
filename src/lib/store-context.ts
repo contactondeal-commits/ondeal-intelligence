@@ -19,6 +19,16 @@ export interface ResolvedStore {
   integrations: {
     shopifyConnected: boolean;
     judgemeConnected: boolean;
+    /**
+     * Vrai si UNE intégration catalogue (SHOPIFY, WOOCOMMERCE ou PRESTASHOP)
+     * est CONNECTED — 04/09/2026. À utiliser à la place de shopifyConnected
+     * partout où "un catalogue est branché" est la vraie question (badge de
+     * statut, activation du bouton Synchroniser) ; shopifyConnected garde son
+     * sens littéral pour ce qui est spécifiquement Shopify (ex. facturation,
+     * qui utilise l'API Subscriptions de Shopify — jamais élargi).
+     */
+    catalogConnected: boolean;
+    catalogProvider: "SHOPIFY" | "WOOCOMMERCE" | "PRESTASHOP" | null;
     lastSyncedAt: Date | null;
   };
 }
@@ -54,7 +64,12 @@ export async function requireStore(searchParams: { store?: string }): Promise<Re
   const integrationRows = await prisma.integration.findMany({ where: { storeId: store!.id } });
   const shopifyIntegration = integrationRows.find((i) => i.provider === "SHOPIFY");
   const judgemeIntegration = integrationRows.find((i) => i.provider === "JUDGEME");
-  const lastSyncedAt = [shopifyIntegration?.lastSyncedAt, judgemeIntegration?.lastSyncedAt]
+  const woocommerceIntegration = integrationRows.find((i) => i.provider === "WOOCOMMERCE");
+  const prestashopIntegration = integrationRows.find((i) => i.provider === "PRESTASHOP");
+  const catalogIntegration = [shopifyIntegration, woocommerceIntegration, prestashopIntegration].find(
+    (i) => i?.status === "CONNECTED",
+  );
+  const lastSyncedAt = [shopifyIntegration?.lastSyncedAt, judgemeIntegration?.lastSyncedAt, woocommerceIntegration?.lastSyncedAt, prestashopIntegration?.lastSyncedAt]
     .filter((d): d is Date => d != null)
     .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
 
@@ -81,6 +96,8 @@ export async function requireStore(searchParams: { store?: string }): Promise<Re
     integrations: {
       shopifyConnected: shopifyIntegration?.status === "CONNECTED",
       judgemeConnected: judgemeIntegration?.status === "CONNECTED",
+      catalogConnected: catalogIntegration !== undefined,
+      catalogProvider: (catalogIntegration?.provider as "SHOPIFY" | "WOOCOMMERCE" | "PRESTASHOP" | undefined) ?? null,
       lastSyncedAt,
     },
   };

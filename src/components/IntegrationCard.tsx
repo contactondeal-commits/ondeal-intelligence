@@ -18,7 +18,7 @@ export default function IntegrationCard({
   manualHelp,
 }: {
   storeId: string;
-  provider: "SHOPIFY" | "JUDGEME";
+  provider: "SHOPIFY" | "JUDGEME" | "WOOCOMMERCE" | "PRESTASHOP";
   title: string;
   description: string;
   status: string;

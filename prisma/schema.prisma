@@ -147,9 +147,17 @@ model Store {
   @@map("stores")
 }
 
+// WOOCOMMERCE/PRESTASHOP (04/09/2026) — connecteurs catalogue alternatifs à
+// Shopify. Un Store n'a JAMAIS plus d'une intégration catalogue CONNECTED en
+// même temps parmi SHOPIFY/WOOCOMMERCE/PRESTASHOP (vérifié par
+// /api/integrations/connect, pas par une contrainte de base — mélanger deux
+// catalogues dans un même Store doublerait le catalogue sans avertissement).
+// JUDGEME reste indépendant de la source catalogue.
 enum IntegrationProvider {
   SHOPIFY
   JUDGEME
+  WOOCOMMERCE
+  PRESTASHOP
 }
 
 enum IntegrationStatus {
