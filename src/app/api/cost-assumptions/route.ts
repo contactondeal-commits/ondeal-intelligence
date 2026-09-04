@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { requireStoreAccess, requireRole, WRITE_ROLES, AuthError } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { recomputeStoreIntelligence } from "@/lib/intelligence/pipeline";
+import { rebuildMarginSnapshots } from "@/lib/sync/shopifyStore";
+import { ORDERS_WINDOW_DAYS } from "@/lib/sync/pipeline";
 
 const schema = z.object({
   storeId: z.string().min(1).max(64),
@@ -57,6 +59,10 @@ export async function POST(req: NextRequest) {
 
     // Recalcule marge/score/recommandations avec les nouvelles hypothèses.
     await recomputeStoreIntelligence(parsed.data.storeId);
+    // Reconstruit aussi la tendance de marge : une hypothèse de coût change
+    // le calcul pour tout l'historique affiché (même logique appliquée
+    // rétroactivement), pas seulement l'état courant.
+    await rebuildMarginSnapshots(parsed.data.storeId, new Date(Date.now() - ORDERS_WINDOW_DAYS * 24 * 60 * 60 * 1000));
 
     return NextResponse.json({ ok: true });
   } catch (err) {

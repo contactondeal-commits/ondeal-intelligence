@@ -8,12 +8,15 @@ import DataTag from "@/components/ui/DataTag";
 import Pagination from "@/components/ui/Pagination";
 import TableControls from "@/components/ui/TableControls";
 import StoreCostDefaultsForm from "@/components/pricing/StoreCostDefaultsForm";
+import MarginTrendChart from "@/components/pricing/MarginTrendChart";
+import CostAssumptionsBanner from "@/components/pricing/CostAssumptionsBanner";
 import { parsePageParams } from "@/lib/pagination";
 import { queryPricingRows, pricingSummary, type CostFilter, type MarginFilter, type PricingSort } from "@/lib/pricing/query";
 import { MARGIN_THRESHOLDS } from "@/lib/intelligence/margin";
 import { supplierCostSourceLabel } from "@/lib/intelligence/costs";
 
-type Params = { store?: string; q?: string; cost?: string; margin?: string; sort?: string; page?: string; pageSize?: string };
+type Params = { store?: string; q?: string; cost?: string; margin?: string; sort?: string; page?: string; pageSize?: string; days?: string };
+const TREND_WINDOWS = [7, 30, 90];
 
 const COST_OPTIONS: Array<{ value: CostFilter; label: string }> = [
   { value: "all", label: "Toutes les sources" },
@@ -80,11 +83,20 @@ export default async function PricingPage({ searchParams }: { searchParams: Prom
   const cost = pick(params.cost, COST_OPTIONS.map((o) => o.value), "all");
   const margin = pick(params.margin, MARGIN_OPTIONS.map((o) => o.value), "all");
   const sort = pick(params.sort, SORT_OPTIONS.map((o) => o.value), "gross_asc");
+  const days = TREND_WINDOWS.includes(Number(params.days)) ? Number(params.days) : 30;
+  const trendSince = new Date();
+  trendSince.setUTCDate(trendSince.getUTCDate() - days);
+  trendSince.setUTCHours(0, 0, 0, 0);
 
-  const [summary, { rows, total }, storeDefaults] = await Promise.all([
+  const [summary, { rows, total }, storeDefaults, marginSnapshots] = await Promise.all([
     pricingSummary(store.id),
     queryPricingRows(store.id, { q: params.q, cost, margin, sort, page, pageSize }),
     prisma.store.findUnique({ where: { id: store.id }, select: { defaultShippingCost: true, defaultPaymentFeesRate: true } }),
+    prisma.marginSnapshot.findMany({
+      where: { storeId: store.id, date: { gte: trendSince } },
+      orderBy: { date: "asc" },
+      select: { date: true, revenue: true, margin: true, marginRate: true, costCoverage: true },
+    }),
   ]);
 
   const urlParams: Record<string, string | undefined> = { store: store.id, q: params.q, cost, margin, sort, pageSize: params.pageSize };
@@ -105,6 +117,8 @@ export default async function PricingPage({ searchParams }: { searchParams: Prom
         </div>
       </div>
 
+      {!assumptionsSet && <CostAssumptionsBanner storeId={store.id} />}
+
       <div className="stat-strip" role="list">
         <StatTile label="Variantes" value={summary.variants.toLocaleString("fr-FR")} tag="real" />
         <StatTile label="Coût réel Shopify" value={summary.withRealCost.toLocaleString("fr-FR")} tag="real" hint={`${summary.withFallbackCost} en repli, ${summary.withoutCost} sans coût`} />
@@ -118,7 +132,13 @@ export default async function PricingPage({ searchParams }: { searchParams: Prom
         />
       </div>
 
-      <div className="card" style={{ marginBottom: 16 }}>
+      <MarginTrendChart
+        points={marginSnapshots.map((s) => ({ date: s.date, revenue: s.revenue, margin: s.margin, marginRate: s.marginRate, costCoverage: s.costCoverage }))}
+        days={days}
+        urlParams={urlParams}
+      />
+
+      <div className="card" style={{ marginBottom: 16 }} id="store-cost-defaults">
         <StoreCostDefaultsForm
           storeId={store.id}
           defaultShippingCost={storeDefaults?.defaultShippingCost ?? null}

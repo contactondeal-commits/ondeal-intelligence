@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { requireStoreAccess, AuthError } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
 import { recomputeStoreIntelligence } from "@/lib/intelligence/pipeline";
+import { rebuildMarginSnapshots } from "@/lib/sync/shopifyStore";
+import { ORDERS_WINDOW_DAYS } from "@/lib/sync/pipeline";
 
 // HYPOTHÈSES boutique (transport moyen, taux de frais de paiement) — jamais
 // des données Shopify. Utilisées en repli des CostAssumption produit pour
@@ -36,6 +38,9 @@ export async function POST(req: NextRequest) {
       }.`,
     });
     await recomputeStoreIntelligence(parsed.data.storeId);
+    // Idem cost-assumptions/route.ts : les hypothèses boutique s'appliquent
+    // rétroactivement à tout l'historique de la tendance de marge.
+    await rebuildMarginSnapshots(parsed.data.storeId, new Date(Date.now() - ORDERS_WINDOW_DAYS * 24 * 60 * 60 * 1000));
     return NextResponse.json({ ok: true });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ error: err.message }, { status: 403 });

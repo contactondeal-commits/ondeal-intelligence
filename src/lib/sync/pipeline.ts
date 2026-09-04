@@ -10,7 +10,7 @@ import {
 import { fetchAllReviews, type JudgemeCredentials } from "@/lib/integrations/judgeme";
 import type { NormalizeIssue } from "@/lib/validation/normalize";
 import { recomputeStoreIntelligence } from "@/lib/intelligence/pipeline";
-import { storeProducts, storeOrders, rebuildSalesSnapshots } from "@/lib/sync/shopifyStore";
+import { storeProducts, storeOrders, rebuildSalesSnapshots, rebuildMarginSnapshots } from "@/lib/sync/shopifyStore";
 
 // PHASE 15 — Synchronisation : FETCH → VALIDATE → NORMALIZE → STORE →
 // ANALYZE → INSIGHTS. Chaque étape est tracée dans SyncRun + AuditLog.
@@ -74,6 +74,7 @@ export async function syncShopify(storeId: string, triggeredBy: "manual" | "sche
       stats.ordersFetch = { ...orderFetchStats, windowDays: ORDERS_WINDOW_DAYS, durationMs: Date.now() - orderFetchStarted };
       stats.orders = await storeOrders(storeId, orders);
       stats.salesSnapshots = await rebuildSalesSnapshots(storeId, new Date(Date.now() - ORDERS_WINDOW_DAYS * 24 * 60 * 60 * 1000));
+      stats.marginSnapshots = await rebuildMarginSnapshots(storeId, new Date(Date.now() - ORDERS_WINDOW_DAYS * 24 * 60 * 60 * 1000));
     } catch (err) {
       issues.push({ field: "orders", problem: `Échec de récupération des commandes: ${String(err)}`, original: null, corrected: null });
       stats.ordersError = String(err);

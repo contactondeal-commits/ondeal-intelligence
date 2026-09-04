@@ -141,6 +141,7 @@ model Store {
   syncRuns         SyncRun[]
   costAssumptions  CostAssumption[]
   orders           Order[]
+  marginSnapshots  MarginSnapshot[]
 
   @@index([organizationId])
   @@map("stores")
@@ -330,6 +331,34 @@ model SalesSnapshot {
   @@unique([productId, date])
   @@index([productId, date])
   @@map("sales_snapshots")
+}
+
+// Agrégat quotidien MARGE (boutique entière), dérivé des mêmes OrderLine que
+// SalesSnapshot — même sémantique (unités = quantité commandée, remboursements
+// NON déduits, commandes annulées exclues) pour que Marge et CA restent
+// comparables jour pour jour (voir rebuildMarginSnapshots, shopifyStore.ts).
+// `revenue` porte le CA RÉEL du jour, toujours complet ; `margin`/`marginRate`
+// ne portent que sur la part du CA où un coût est connu — `costCoverage`
+// (part du CA du jour concernée, pas juste un nombre de lignes) rend cette
+// limite visible plutôt que de gonfler silencieusement un taux moyen.
+model MarginSnapshot {
+  id            String   @id @default(cuid())
+  storeId       String
+  date          DateTime
+  revenue       Float // CA réel du jour (REAL) — toutes lignes, comme SalesSnapshot.revenue
+  totalCost     Float? // somme des coûts totaux, uniquement sur la part du CA à coût connu
+  grossMargin   Float? // prix − coût fournisseur, avant transport/frais, sur la part à coût connu
+  margin        Float? // marge complète (après transport + frais de paiement), sur la part à coût connu
+  marginRate    Float? // margin / (revenue de la part à coût connu) — jamais / revenue total
+  costCoverage  Float // part du CA du jour où le coût est connu (0–1), pas une part du nombre de lignes
+  orderCount    Int
+  unitsSold     Int
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, date])
+  @@index([storeId, date])
+  @@map("margin_snapshots")
 }
 
 // ---------------------------------------------------------------------------

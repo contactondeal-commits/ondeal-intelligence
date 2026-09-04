@@ -1797,6 +1797,10 @@ table.table-compact td .data-tag-compact { margin-left: 4px; }
 .chart-grid { stroke: rgba(255, 255, 255, 0.08); stroke-width: 1; }
 .chart-axis { fill: var(--color-text-faint); font-size: 10px; }
 .chart-bar { fill: var(--color-primary); }
+.chart-bar-muted { fill: var(--color-primary); opacity: 0.45; }
+.chart-grid-zero { stroke: rgba(255, 255, 255, 0.18); }
+.chart-line { stroke: var(--color-accent); stroke-width: 2; }
+.chart-line-dot { fill: var(--color-accent); }
 .chart-empty { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 22px 14px; border: 1px dashed var(--color-border-strong); border-radius: var(--radius-md); font-size: var(--text-sm); color: var(--color-text-muted); }
 
 .signal-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }

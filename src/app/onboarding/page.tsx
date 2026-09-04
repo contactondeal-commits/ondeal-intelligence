@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const STEPS = ["Boutique", "Intégrations", "Analyse"];
+const STEPS = ["Boutique", "Intégrations", "Coûts"];
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -13,6 +13,8 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [storeId, setStoreId] = useState<string | null>(null);
+  const [shipping, setShipping] = useState("");
+  const [fees, setFees] = useState("");
 
   async function createRealStore() {
     setLoading(true);
@@ -49,6 +51,34 @@ export default function OnboardingPage() {
     }
     const data = await res.json();
     router.push(`/dashboard?store=${data.storeId}`);
+  }
+
+  // Étape 3 — hypothèses de coût boutique (transport, frais de paiement).
+  // Sans elles, la marge complète reste INDISPONIBLE sur tout le catalogue
+  // (voir Prix & Marge) : demandée ici pour que le client la voie dès le
+  // départ, jamais bloquante (« Ignorer » reste toujours possible — la
+  // bannière de Prix & Marge reprend le relais si le client passe par
+  // l'installation Shopify en un clic, qui ne passe pas par cet écran).
+  async function saveCostAssumptions() {
+    if (!storeId) return;
+    setLoading(true);
+    setError(null);
+    const res = await fetch("/api/stores/cost-defaults", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        storeId,
+        defaultShippingCost: shipping.trim() === "" ? null : Number(shipping),
+        defaultPaymentFeesRate: fees.trim() === "" ? null : Number(fees) / 100,
+      }),
+    });
+    setLoading(false);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setError(data.error ?? "Échec de l'enregistrement.");
+      return;
+    }
+    router.push(`/dashboard?store=${storeId}`);
   }
 
   return (
@@ -102,9 +132,39 @@ export default function OnboardingPage() {
             <button
               className="btn btn-secondary"
               style={{ width: "100%", marginTop: 10 }}
+              onClick={() => setStep(2)}
+            >
+              Passer cette étape
+            </button>
+          </>
+        )}
+
+        {step === 2 && storeId && (
+          <>
+            <h1 style={{ fontSize: 20, fontWeight: 800, marginBottom: 6 }}>Hypothèses de coût</h1>
+            <p style={{ color: "#6b6b85", fontSize: 14, marginBottom: 20 }}>
+              Pour calculer votre marge complète, renseignez vos coûts moyens. Vous pourrez les affiner produit par
+              produit plus tard, dans Prix &amp; Marge.
+            </p>
+            {error && <div className="callout callout-error">{error}</div>}
+            <div className="field">
+              <label>Transport moyen par unité vendue (€)</label>
+              <input className="input" type="number" min="0" step="0.01" placeholder="non renseigné" value={shipping} onChange={(e) => setShipping(e.target.value)} />
+            </div>
+            <div className="field">
+              <label>Frais de paiement (%)</label>
+              <input className="input" type="number" min="0" max="100" step="0.01" placeholder="non renseigné" value={fees} onChange={(e) => setFees(e.target.value)} />
+            </div>
+            <button className="btn btn-primary" style={{ width: "100%" }} disabled={loading} onClick={saveCostAssumptions}>
+              {loading ? "Enregistrement…" : "Enregistrer et continuer →"}
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ width: "100%", marginTop: 10 }}
+              disabled={loading}
               onClick={() => router.push(`/dashboard?store=${storeId}`)}
             >
-              Passer cette étape — voir le tableau de bord
+              Ignorer pour l&apos;instant
             </button>
           </>
         )}

@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/db";
 import type { ShopifyProductNode, ShopifyOrderNode } from "@/lib/integrations/shopify";
 import { normalizeVariant, normalizeHandle, type NormalizeIssue } from "@/lib/validation/normalize";
+import { analyzeMargin } from "@/lib/intelligence/margin";
+import { resolveCostInputs } from "@/lib/intelligence/costs";
 
 /**
  * Étape STORE du pipeline de synchronisation, isolée du FETCH pour être
@@ -285,4 +287,119 @@ export async function rebuildSalesSnapshots(storeId: string, since: Date): Promi
   ]);
 
   return { rowsWritten: rows.length, productsWithSales: new Set(rows.map((r) => r.productId)).size };
+}
+
+/**
+ * Agrégat quotidien MARGE (boutique entière), même principe que
+ * rebuildSalesSnapshots — mêmes lignes source, même fenêtre, même
+ * sémantique d'unités (quantité commandée, remboursements NON déduits) pour
+ * que Marge et CA restent comparables jour pour jour. Coût résolu via
+ * `resolveCostInputs` / `analyzeMargin` — jamais une règle de priorité
+ * réimplémentée ici, pour ne jamais diverger de Prix & Marge ou de
+ * `recomputeStoreIntelligence`. Fenêtre reconstruite intégralement
+ * (suppression puis réinsertion) pour qu'une commande annulée depuis la
+ * dernière sync, ou un changement d'hypothèses de coût, se reflète
+ * correctement dans l'historique (appelée après chaque sync ET après chaque
+ * changement d'hypothèses — voir sync/pipeline.ts et les routes
+ * cost-assumptions / stores/cost-defaults).
+ */
+export async function rebuildMarginSnapshots(storeId: string, since: Date): Promise<{ rowsWritten: number }> {
+  const storeDefaults = await prisma.store.findUnique({
+    where: { id: storeId },
+    select: { defaultShippingCost: true, defaultPaymentFeesRate: true },
+  });
+  if (!storeDefaults) return { rowsWritten: 0 };
+
+  const lines = await prisma.orderLine.findMany({
+    where: { order: { storeId, cancelledAt: null, createdAtShopify: { gte: since } } },
+    select: {
+      orderId: true,
+      quantity: true,
+      discountedTotal: true,
+      variant: { select: { unitCost: true } },
+      product: { select: { costAssumption: { select: { supplierCost: true, shippingCost: true, paymentFeesRate: true, otherFixedCost: true } } } },
+      order: { select: { createdAtShopify: true } },
+    },
+  });
+
+  type DayAgg = {
+    revenue: number;
+    revenueWithKnownCost: number;
+    unitsSold: number;
+    orderIds: Set<string>;
+    totalCostKnown: number;
+    grossMarginKnown: number;
+    marginKnown: number;
+    hasMargin: boolean;
+  };
+  const byDay = new Map<string, DayAgg>();
+
+  for (const line of lines) {
+    const day = line.order.createdAtShopify.toISOString().slice(0, 10);
+    const agg = byDay.get(day) ?? {
+      revenue: 0,
+      revenueWithKnownCost: 0,
+      unitsSold: 0,
+      orderIds: new Set<string>(),
+      totalCostKnown: 0,
+      grossMarginKnown: 0,
+      marginKnown: 0,
+      hasMargin: false,
+    };
+    agg.revenue += line.discountedTotal;
+    agg.unitsSold += line.quantity;
+    agg.orderIds.add(line.orderId);
+
+    // Prix par unité dérivé de la ligne réelle (comme rebuildSalesSnapshots),
+    // JAMAIS le prix catalogue courant (une commande passée reste au prix
+    // auquel elle a été vendue).
+    const pricePerUnit = line.quantity > 0 ? line.discountedTotal / line.quantity : null;
+    const costs = resolveCostInputs(
+      line.variant ? { unitCost: line.variant.unitCost } : null,
+      line.product?.costAssumption ?? null,
+      storeDefaults,
+    );
+    const analysis = analyzeMargin({
+      productId: "",
+      variantId: "",
+      title: "",
+      sellingPrice: pricePerUnit,
+      supplierCost: costs.supplierCost,
+      supplierCostSource: costs.supplierCostSource,
+      shippingCost: costs.shippingCost,
+      paymentFeesRate: costs.paymentFeesRate,
+      otherFixedCost: costs.otherFixedCost,
+    });
+
+    if (analysis.margin !== null) {
+      agg.hasMargin = true;
+      agg.revenueWithKnownCost += line.discountedTotal;
+      agg.marginKnown += analysis.margin * line.quantity;
+      agg.totalCostKnown += (analysis.totalCost as number) * line.quantity;
+    }
+    if (analysis.grossMargin !== null) {
+      agg.grossMarginKnown += analysis.grossMargin * line.quantity;
+    }
+    byDay.set(day, agg);
+  }
+
+  const rows = [...byDay.entries()].map(([day, agg]) => ({
+    storeId,
+    date: new Date(day),
+    revenue: Math.round(agg.revenue * 100) / 100,
+    totalCost: agg.hasMargin ? Math.round(agg.totalCostKnown * 100) / 100 : null,
+    grossMargin: agg.hasMargin ? Math.round(agg.grossMarginKnown * 100) / 100 : null,
+    margin: agg.hasMargin ? Math.round(agg.marginKnown * 100) / 100 : null,
+    marginRate: agg.hasMargin && agg.revenueWithKnownCost > 0 ? agg.marginKnown / agg.revenueWithKnownCost : null,
+    costCoverage: agg.revenue > 0 ? agg.revenueWithKnownCost / agg.revenue : 0,
+    orderCount: agg.orderIds.size,
+    unitsSold: agg.unitsSold,
+  }));
+
+  await prisma.$transaction([
+    prisma.marginSnapshot.deleteMany({ where: { storeId, date: { gte: new Date(since.toISOString().slice(0, 10)) } } }),
+    ...(rows.length > 0 ? [prisma.marginSnapshot.createMany({ data: rows })] : []),
+  ]);
+
+  return { rowsWritten: rows.length };
 }
