@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, ChevronDown } from "lucide-react";
 import StoreSwitcher from "@/components/StoreSwitcher";
 import LogoutButton from "@/components/LogoutButton";
 import { NAV_ICONS } from "@/components/icons";
+import LogoMark from "@/components/Logo";
 
 export interface NavItem {
   /** Clé stable d'activation (ex. "/intelligence?filter=urgent"). */
@@ -103,10 +104,7 @@ export default function Sidebar({
     <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`} style={hydrated ? undefined : { transition: "none" }} aria-label="Navigation principale">
       <div className="sidebar-brand">
         <span className="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
-            <circle cx="12" cy="12" r="6.5" />
-            <circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none" />
-          </svg>
+          <LogoMark size={18} />
         </span>
         <span className="sidebar-brand-label brand-text">
           <span className="brand-name">ONDEAL</span>

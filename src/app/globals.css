@@ -483,6 +483,9 @@ table.table tbody tr:hover { background: var(--color-surface-alt); }
   width: 100%;
 }
 .auth-marketing { max-width: 480px; }
+.auth-marketing-brand { display: flex; align-items: center; gap: 10px; margin-bottom: var(--space-4); }
+.auth-marketing-brand .brand-mark { width: 30px; height: 30px; border-radius: 9px; }
+.auth-marketing-brand .auth-marketing-kicker { margin-bottom: 0; }
 .auth-marketing-kicker {
   font-size: var(--text-2xs);
   font-weight: var(--font-bold);

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Package, Star, TrendingUp, Sparkles, ShieldCheck } from "lucide-react";
+import LogoMark from "@/components/Logo";
 
 const FEATURES = [
   {
@@ -63,7 +64,12 @@ export default function LoginPage() {
     <div className="auth-wrap auth-wrap-split">
       <div className="auth-shell">
         <section className="auth-marketing" aria-label="À propos d'OnDeal Intelligence">
-          <p className="auth-marketing-kicker">OnDeal Intelligence</p>
+          <div className="auth-marketing-brand">
+            <span className="brand-mark" aria-hidden="true">
+              <LogoMark size={18} />
+            </span>
+            <p className="auth-marketing-kicker">OnDeal Intelligence</p>
+          </div>
           <h1 className="auth-marketing-title">Le copilote qui repère les problèmes de votre boutique avant vous</h1>
           <p className="auth-marketing-lead">
             Stock, avis, prix et marge : OnDeal Intelligence transforme les données réelles de votre boutique Shopify
