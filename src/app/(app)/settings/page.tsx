@@ -3,7 +3,7 @@ import { Building2, Store as StoreIcon, Plug, Users } from "lucide-react";
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
-import DataTag from "@/components/ui/DataTag";
+import BillingPanel from "@/components/BillingPanel";
 import { PLAN_FEATURES } from "@/lib/plan-limits";
 
 const FEATURE_LABEL: Record<string, string> = {
@@ -32,10 +32,14 @@ const FEATURE_LABEL: Record<string, string> = {
  * équipe, intégrations, synchronisation) ; aucune option factice
  * (facturation, notifications, planification) n'est présentée.
  */
-export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
-  const store = await requireStore(await searchParams);
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ store?: string; billing?: string }> }) {
+  const resolvedSearchParams = await searchParams;
+  const store = await requireStore(resolvedSearchParams);
   const [org, members, planLimit, storeCounts, lastSync, integrations] = await Promise.all([
-    prisma.organization.findUnique({ where: { id: store.organizationId }, select: { name: true, plan: true, createdAt: true } }),
+    prisma.organization.findUnique({
+      where: { id: store.organizationId },
+      select: { name: true, plan: true, createdAt: true, billingProvider: true, shopifySubscriptionStatus: true },
+    }),
     prisma.membership.findMany({ where: { organizationId: store.organizationId }, include: { user: { select: { name: true, email: true } } }, orderBy: { createdAt: "asc" } }),
     prisma.planLimit.findUnique({ where: { plan: store.plan as "STARTER" | "PRO" | "BUSINESS" | "AGENCY" } }),
     prisma.product.groupBy({ by: ["storeId"], where: { storeId: { in: store.allStores.map((s) => s.id) } }, _count: true }),
@@ -131,9 +135,13 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
               </span>
             ))}
           </div>
-          <p className="cell-sub">
-            <DataTag status="unavailable" compact /> Facturation et changement de plan non disponibles dans cette version.
-          </p>
+          <BillingPanel
+            storeId={store.id}
+            currentPlan={store.plan as "STARTER" | "PRO" | "BUSINESS" | "AGENCY"}
+            shopifyConnected={shopify?.status === "CONNECTED"}
+            subscriptionStatus={org?.shopifySubscriptionStatus ?? null}
+            billingReturn={resolvedSearchParams.billing === "return"}
+          />
         </section>
       </div>
 

@@ -1776,6 +1776,24 @@ table.table-products td .cell-sub { margin-top: 1px; }
 .signal-cell .badge { white-space: nowrap; }
 .feature-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 
+/* Pages légales publiques (ex. /privacy) — pas d'AppShell, pas d'auth. */
+.legal-page { min-height: 100vh; padding: var(--space-12) var(--space-6); }
+.legal-page-inner { max-width: 720px; margin: 0 auto; color: var(--color-text); }
+.legal-kicker { font-size: var(--text-2xs); font-weight: var(--font-semibold); color: var(--color-text-faint); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 6px; }
+.legal-page-inner h1 { font-size: 26px; font-weight: var(--font-extrabold); margin: 0 0 4px; }
+.legal-updated { color: var(--color-text-faint); font-size: var(--text-xs); margin: 0 0 var(--space-8); }
+.legal-page-inner h2 { font-size: 16px; font-weight: var(--font-bold); margin: var(--space-8) 0 var(--space-2); }
+.legal-page-inner p, .legal-page-inner li { font-size: 14px; line-height: 1.65; color: var(--color-text-muted); }
+.legal-page-inner p { margin: 0 0 var(--space-4); }
+.legal-page-inner ul { margin: 0 0 var(--space-4); padding-left: 1.2em; }
+.legal-page-inner li { margin-bottom: var(--space-2); }
+.legal-page-inner strong { color: var(--color-text); }
+.legal-page-inner a { color: var(--color-primary); }
+.billing-plan-grid { display: flex; flex-direction: column; gap: 6px; }
+.billing-plan-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--color-border); }
+.billing-plan-option:last-child { border-bottom: none; }
+.billing-plan-option.is-current { color: var(--color-text-muted); }
+
 /* Mobile — les tableaux de scénario/mesure défilent dans leur conteneur,
    jamais la page entière (04/09/2026). */
 .scenario, .measurement { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
