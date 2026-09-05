@@ -158,6 +158,10 @@ enum IntegrationProvider {
   JUDGEME
   WOOCOMMERCE
   PRESTASHOP
+  // Fournisseur (dropshipping) — indépendant du catalogue (05/09/2026) :
+  // lecture seule du stock réel CJ, jamais compté comme intégration
+  // catalogue (voir CATALOG_PROVIDERS, api/integrations/connect/route.ts).
+  CJDROPSHIPPING
 }
 
 enum IntegrationStatus {

@@ -8,6 +8,7 @@ import { verifyShopifyCredentials, type ShopifyCredentials } from "@/lib/integra
 import { verifyJudgemeCredentials, type JudgemeCredentials } from "@/lib/integrations/judgeme";
 import { verifyWooCommerceCredentials, type WooCommerceCredentials } from "@/lib/integrations/woocommerce";
 import { verifyPrestaShopCredentials, type PrestaShopCredentials } from "@/lib/integrations/prestashop";
+import { verifyCjCredentials, type CjCredentials } from "@/lib/integrations/cjdropshipping";
 import { syncCatalog, syncJudgeme } from "@/lib/sync/pipeline";
 
 // PHASE 17/18 — Connexion d'une intégration. Les credentials sont
@@ -25,7 +26,7 @@ type CatalogProvider = (typeof CATALOG_PROVIDERS)[number];
 const bodySchema = z
   .object({
     storeId: z.string().min(1).max(64),
-    provider: z.enum(["SHOPIFY", "JUDGEME", "WOOCOMMERCE", "PRESTASHOP"]),
+    provider: z.enum(["SHOPIFY", "JUDGEME", "WOOCOMMERCE", "PRESTASHOP", "CJDROPSHIPPING"]),
     credentials: z
       .object({
         domain: z.string().trim().max(253).optional(),
@@ -35,6 +36,7 @@ const bodySchema = z
         siteUrl: z.string().trim().max(253).optional(),
         consumerKey: z.string().trim().max(512).optional(),
         consumerSecret: z.string().trim().max(512).optional(),
+        apiKey: z.string().trim().max(512).optional(),
       })
       .strict(),
   })
@@ -168,6 +170,19 @@ export async function POST(req: NextRequest) {
       await prisma.integration.upsert({
         where: { storeId_provider: { storeId, provider: "PRESTASHOP" } },
         create: { storeId, provider: "PRESTASHOP", status: "CONNECTED", encryptedCredentials: encryptJson(creds) },
+        update: { status: "CONNECTED", encryptedCredentials: encryptJson(creds), lastError: null },
+      });
+    } else if (provider === "CJDROPSHIPPING") {
+      // Fournisseur, PAS un connecteur catalogue — jamais soumis à la
+      // contrainte "un seul catalogue à la fois" ci-dessus (isCatalogProvider
+      // renvoie false pour CJDROPSHIPPING).
+      if (!credentials.apiKey) throw new Error("Clé API CJ requise.");
+      const creds: CjCredentials = { apiKey: credentials.apiKey };
+      await verifyCjCredentials(creds);
+
+      await prisma.integration.upsert({
+        where: { storeId_provider: { storeId, provider: "CJDROPSHIPPING" } },
+        create: { storeId, provider: "CJDROPSHIPPING", status: "CONNECTED", encryptedCredentials: encryptJson(creds) },
         update: { status: "CONNECTED", encryptedCredentials: encryptJson(creds), lastError: null },
       });
     }

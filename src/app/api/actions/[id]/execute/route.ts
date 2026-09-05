@@ -4,6 +4,8 @@ import { requireStoreAccess, requireRole, WRITE_ROLES, AuthError } from "@/lib/a
 import { logAudit } from "@/lib/audit";
 import { updateVariantPrice, updateProductStatus, type ShopifyCredentials } from "@/lib/integrations/shopify";
 import { getFreshShopifyCredentials } from "@/lib/integrations/shopify-token";
+import { queryCjVariantStock, type CjCredentials } from "@/lib/integrations/cjdropshipping";
+import { decryptJson } from "@/lib/crypto";
 import { isPriceStale } from "@/lib/intelligence/decision";
 import {
   comparePriceSnapshot,
@@ -78,7 +80,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         result = await executeUnpublish(action.storeId, payload);
         break;
       case "review_supplier":
-        result = await executeReviewSupplier(payload);
+        result = await executeReviewSupplier(action.storeId, payload);
         break;
       case "request_reviews":
       case "promote_product":
@@ -130,6 +132,82 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   });
 
   return NextResponse.json({ ...result });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Nombre max de variantes vérifiées en direct auprès de CJ en un seul clic
+// "Vérifier le fournisseur" — une mission groupée (voir group.ts) peut
+// porter jusqu'à plusieurs dizaines de variantes ; on plafonne pour ne
+// jamais risquer de heurter la limite de débit CJ sur un seul clic humain.
+// Les variantes au-delà de ce plafond ne sont simplement pas vérifiées —
+// jamais un résultat inventé pour elles.
+const MAX_CJ_LOOKUPS_PER_EXECUTION = 20;
+const CJ_LOOKUP_DELAY_MS = 350;
+
+/** `null` si CJ n'est pas connecté pour cette boutique — le connecteur est optionnel, jamais requis pour exécuter "Vérifier le fournisseur". */
+async function getCjCreds(storeId: string): Promise<CjCredentials | null> {
+  const integration = await prisma.integration.findUnique({ where: { storeId_provider: { storeId, provider: "CJDROPSHIPPING" } } });
+  if (!integration || integration.status !== "CONNECTED" || !integration.encryptedCredentials) return null;
+  return decryptJson<CjCredentials>(integration.encryptedCredentials);
+}
+
+/**
+ * Vérifie en direct auprès de CJ le stock réel des variantes fournies, et
+ * met à jour `Variant.supplierStock` avec la valeur RÉELLE reçue — c'est ce
+ * même champ que `supplierMismatch` (recommendations.ts) lit déjà pour
+ * distinguer une vraie rupture d'un simple défaut de synchro de l'app CJ.
+ * Best-effort : une erreur CJ (clé invalide, SKU inconnu, réseau) pour UNE
+ * variante n'empêche jamais de vérifier les autres, ni de terminer la
+ * mission — cette vérification reste une enrichissement, jamais une
+ * condition bloquante de "Vérifier le fournisseur".
+ */
+async function checkCjStock(storeId: string, variantIds: string[]): Promise<string | null> {
+  const creds = await getCjCreds(storeId);
+  if (!creds) return null;
+
+  const variants = await prisma.variant.findMany({
+    where: { id: { in: variantIds.slice(0, MAX_CJ_LOOKUPS_PER_EXECUTION) }, sku: { not: null } },
+    select: { id: true, sku: true, title: true },
+  });
+  if (variants.length === 0) return null;
+
+  const lines: string[] = [];
+  let mismatchCount = 0;
+  let confirmedCount = 0;
+
+  for (let i = 0; i < variants.length; i++) {
+    const v = variants[i]!;
+    if (i > 0) await sleep(CJ_LOOKUP_DELAY_MS);
+    try {
+      const stock = await queryCjVariantStock(creds, v.sku!);
+      if (!stock) {
+        lines.push(`${v.title} (${v.sku}) : SKU inconnu chez CJ.`);
+        continue;
+      }
+      await prisma.variant.update({ where: { id: v.id }, data: { supplierStock: stock.cjInventory } });
+      if (stock.cjInventory > 0) {
+        mismatchCount++;
+        lines.push(`${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s) — pas encore synchronisé sur Shopify.`);
+      } else {
+        confirmedCount++;
+        lines.push(`${v.title} (${v.sku}) : CJ confirme 0 unité — rupture réelle chez le fournisseur.`);
+      }
+    } catch (err) {
+      lines.push(`${v.title} (${v.sku}) : vérification CJ impossible (${err instanceof Error ? err.message : "erreur inconnue"}).`);
+    }
+  }
+
+  const summary =
+    mismatchCount > 0
+      ? `⚠️ Vérifié en direct chez CJ : ${mismatchCount} variante(s) ont en réalité du stock chez CJ, non synchronisé sur Shopify — vérifiez l'app CJ.`
+      : confirmedCount > 0
+        ? `Vérifié en direct chez CJ : rupture confirmée réellement côté fournisseur pour ${confirmedCount} variante(s).`
+        : "CJ n'a renvoyé aucune correspondance exploitable pour ces SKU.";
+
+  return [summary, ...lines].join("\n");
 }
 
 async function getShopifyCreds(storeId: string): Promise<ShopifyCredentials> {
@@ -243,7 +321,7 @@ async function executeUpdatePrice(storeId: string, payload: Record<string, unkno
  * sur une preuve obsolète — même architecture, mêmes primitives
  * (`analyzeStock` via `fetchCurrentStockFields`) que pour le prix.
  */
-async function executeReviewSupplier(payload: Record<string, unknown>): Promise<ExecutionOutcome> {
+async function executeReviewSupplier(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
   const rawSnapshot = payload.simulationSnapshot;
   if (isMultiStockSnapshot(rawSnapshot)) {
     // Mission agrégée par produit — voir recommendations.ts et snapshot.ts.
@@ -270,10 +348,36 @@ async function executeReviewSupplier(payload: Record<string, unknown>): Promise<
     // informationnelle et peut être close (contrairement à update_price, où
     // un produit/variante introuvable bloque une vraie mutation).
   }
+  const baseDetail =
+    "Mission marquée comme prise en charge par vous — OnDeal n'a effectué aucune modification automatique de la boutique pour ce type d'action.";
+
+  // Enrichissement optionnel (05/09/2026) : si CJdropshipping est connecté
+  // pour cette boutique, vérifie en direct le stock réel des variantes
+  // concernées AVANT de clore la mission comme "prise en charge" — jamais
+  // une valeur inventée, jamais bloquant si CJ échoue (voir checkCjStock).
+  const variantIds: string[] =
+    typeof payload.variantId === "string"
+      ? [payload.variantId]
+      : Array.isArray(payload.variantIds)
+        ? (payload.variantIds as unknown[]).filter((v): v is string => typeof v === "string")
+        : [];
+
+  let cjDetail: string | null = null;
+  if (variantIds.length > 0) {
+    try {
+      cjDetail = await checkCjStock(storeId, variantIds);
+    } catch (err) {
+      console.error("[actions/execute] vérification CJ échouée (non bloquant)", {
+        storeId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return {
     ok: true,
     kind: "manual_mission_completed",
-    detail: "Mission marquée comme prise en charge par vous — OnDeal n'a effectué aucune modification automatique de la boutique pour ce type d'action.",
+    detail: cjDetail ? `${baseDetail}\n\n${cjDetail}` : baseDetail,
   };
 }
 

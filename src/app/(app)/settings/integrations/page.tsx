@@ -12,6 +12,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const judgeme = integrations.find((i) => i.provider === "JUDGEME");
   const woocommerce = integrations.find((i) => i.provider === "WOOCOMMERCE");
   const prestashop = integrations.find((i) => i.provider === "PRESTASHOP");
+  const cjdropshipping = integrations.find((i) => i.provider === "CJDROPSHIPPING");
 
   return (
     <AppShell store={store} active="/settings">
@@ -118,6 +119,23 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               Admin Judge.me → <strong>Settings</strong> → <strong>Integrations</strong> → <strong>View API
               tokens</strong> (en haut à droite) → copiez <strong>Your Private API Token</strong> — jamais le jeton
               public, insuffisant pour cet usage.
+            </>
+          }
+        />
+        <IntegrationCard
+          storeId={store.id}
+          provider="CJDROPSHIPPING"
+          title="CJdropshipping"
+          description="Vérifie le vrai stock fournisseur sur vos ruptures (lecture seule — n'écrit jamais sur Shopify ni sur CJ)."
+          status={cjdropshipping?.status ?? "NOT_CONNECTED"}
+          lastError={cjdropshipping?.lastError ?? null}
+          lastSyncedAt={cjdropshipping?.lastSyncedAt?.toISOString() ?? null}
+          fields={[{ key: "apiKey", label: "Clé API CJ", placeholder: "CJ5xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx32", type: "password" }]}
+          manualHelp={
+            <>
+              cjdropshipping.com → connecté → <strong>My CJ</strong> → <strong>Authorization</strong> →{" "}
+              <strong>API</strong> → <strong>Add API</strong> (type API Key) → copiez la clé générée. Fournisseur
+              indépendant du catalogue : vous pouvez la connecter en plus de Shopify/WooCommerce/PrestaShop.
             </>
           }
         />
