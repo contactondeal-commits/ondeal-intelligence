@@ -13,8 +13,9 @@ import { recomputeStoreIntelligence } from "@/lib/intelligence/pipeline";
 /** Fenêtre de rapport GA4 lue à chaque synchronisation (jours). */
 export const GA_WINDOW_DAYS = 30;
 
+/** Format de date attendu par l'API GA4 (Data API v1beta) pour dateRanges : YYYY-MM-DD. */
 function formatGaDate(d: Date): string {
-  return d.toISOString().slice(0, 10).replace(/-/g, "");
+    return d.toISOString().slice(0, 10);
 }
 
 export type GaSyncStatus = "success" | "error" | "not_connected" | "pending_property" | "refused_demo";
