@@ -185,13 +185,35 @@ async function checkCjStock(storeId: string, variantIds: string[]): Promise<stri
 
   const variants = await prisma.variant.findMany({
     where: { id: { in: variantIds.slice(0, MAX_CJ_LOOKUPS_PER_EXECUTION) }, sku: { not: null } },
-    select: { id: true, sku: true, title: true },
+    select: { id: true, sku: true, title: true, inventoryQuantity: true, shopifyVariantId: true },
   });
   if (variants.length === 0) return null;
+
+  // CORRECTIF 05/09/2026 v2 — jusqu'ici cette vérification ne faisait que
+  // rafraîchir Variant.supplierStock (affichage), en laissant Shopify
+  // réellement en rupture malgré un stock CJ confirmé : le marchand devait
+  // ensuite aller corriger lui-même dans Shopify. Choix explicite de
+  // l'utilisateur (voir question posée avant ce correctif) : au clic
+  // "Vérifier le fournisseur", corriger AUSSI réellement Shopify — mais
+  // JAMAIS automatiquement en tâche planifiée (le marchand garde la main sur
+  // le déclenchement), et seulement dans le sens sûr : une VRAIE rupture
+  // affichée (inventoryQuantity === 0) remontée à la valeur CJ confirmée,
+  // jamais une diminution silencieuse d'un stock existant sur la seule foi
+  // du chiffre fournisseur. Jetons Shopify résolus une seule fois pour tout
+  // le lot ; best-effort — absent/erreur ne bloque jamais la mission, la
+  // vérification CJ (et le rafraîchissement de supplierStock) reste utile
+  // même sans Shopify connecté.
+  let shopifyCreds: ShopifyCredentials | null = null;
+  try {
+    shopifyCreds = await getShopifyCreds(storeId);
+  } catch {
+    shopifyCreds = null;
+  }
 
   const lines: string[] = [];
   let mismatchCount = 0;
   let confirmedCount = 0;
+  let correctedCount = 0;
 
   for (let i = 0; i < variants.length; i++) {
     const v = variants[i]!;
@@ -205,7 +227,18 @@ async function checkCjStock(storeId: string, variantIds: string[]): Promise<stri
       await prisma.variant.update({ where: { id: v.id }, data: { supplierStock: stock.cjInventory } });
       if (stock.cjInventory > 0) {
         mismatchCount++;
-        lines.push(`${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s) — pas encore synchronisé sur Shopify.`);
+        if (v.inventoryQuantity === 0 && shopifyCreds) {
+          const res = await updateVariantStock(shopifyCreds, v.shopifyVariantId, stock.cjInventory);
+          if (res.ok) {
+            await prisma.variant.update({ where: { id: v.id }, data: { inventoryQuantity: res.quantity } });
+            correctedCount++;
+            lines.push(`${v.title} (${v.sku}) : stock corrigé automatiquement sur Shopify (0 → ${res.quantity} unité(s), confirmé par CJ).`);
+          } else {
+            lines.push(`${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s), mais la correction Shopify a échoué (${res.error}) — à corriger manuellement.`);
+          }
+        } else {
+          lines.push(`${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s) — pas encore synchronisé sur Shopify.`);
+        }
       } else {
         confirmedCount++;
         lines.push(`${v.title} (${v.sku}) : CJ confirme 0 unité — rupture réelle chez le fournisseur.`);
@@ -216,11 +249,13 @@ async function checkCjStock(storeId: string, variantIds: string[]): Promise<stri
   }
 
   const summary =
-    mismatchCount > 0
-      ? `⚠️ Vérifié en direct chez CJ : ${mismatchCount} variante(s) ont en réalité du stock chez CJ, non synchronisé sur Shopify — vérifiez l'app CJ.`
-      : confirmedCount > 0
-        ? `Vérifié en direct chez CJ : rupture confirmée réellement côté fournisseur pour ${confirmedCount} variante(s).`
-        : "CJ n'a renvoyé aucune correspondance exploitable pour ces SKU.";
+    correctedCount > 0
+      ? `✅ ${correctedCount} variante(s) corrigée(s) automatiquement sur Shopify suite à un stock CJ confirmé.${mismatchCount > correctedCount ? ` ${mismatchCount - correctedCount} autre(s) restent à corriger manuellement (Shopify non connecté ou échec).` : ""}`
+      : mismatchCount > 0
+        ? `⚠️ Vérifié en direct chez CJ : ${mismatchCount} variante(s) ont en réalité du stock chez CJ, non synchronisé sur Shopify — vérifiez l'app CJ.`
+        : confirmedCount > 0
+          ? `Vérifié en direct chez CJ : rupture confirmée réellement côté fournisseur pour ${confirmedCount} variante(s).`
+          : "CJ n'a renvoyé aucune correspondance exploitable pour ces SKU.";
 
   return [summary, ...lines].join("\n");
 }
@@ -395,7 +430,7 @@ export async function executeUpdateStock(storeId: string, payload: Record<string
  * sur une preuve obsolète — même architecture, mêmes primitives
  * (`analyzeStock` via `fetchCurrentStockFields`) que pour le prix.
  */
-async function executeReviewSupplier(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
+export async function executeReviewSupplier(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
   const rawSnapshot = payload.simulationSnapshot;
   if (isMultiStockSnapshot(rawSnapshot)) {
     // Mission agrégée par produit — voir recommendations.ts et snapshot.ts.

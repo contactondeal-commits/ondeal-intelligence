@@ -12,10 +12,17 @@ import type { PriceOutcomeMeasurement } from "@/lib/intelligence/prediction";
  * encore : la fiche produit affichait un stock "en lecture seule" sans
  * qu'aucun marchand ne puisse le corriger depuis OnDeal). Tous les autres
  * types générés par `recommendations.ts` (`review_supplier`,
- * `request_reviews`, `promote_product`, `edit_product_data`) n'ont aucune
- * mutation associée — ce sont des missions qu'OnDeal prépare et explique,
- * mais que l'utilisateur doit réaliser lui-même (contacter un fournisseur,
- * demander des avis, etc.).
+ * `request_reviews`, `promote_product`, `edit_product_data`) n'ont
+ * d'ordinaire aucune mutation associée — ce sont des missions qu'OnDeal
+ * prépare et explique, mais que l'utilisateur doit réaliser lui-même
+ * (contacter un fournisseur, demander des avis, etc.). EXCEPTION ciblée
+ * (05/09/2026 v2) : `review_supplier`, une fois confirmé par clic humain,
+ * PEUT déclencher une vraie correction de stock Shopify si CJdropshipping
+ * confirme un stock réel pour une rupture affichée à 0 (voir checkCjStock,
+ * execute/route.ts) — reste classé `manual_mission` ici car ce n'est pas
+ * garanti à chaque exécution (dépend de CJ/Shopify connectés et de l'état
+ * réel du stock), contrairement à `update_price`/`update_stock` où la
+ * mutation est systématique.
  *
  * Source unique utilisée à la fois par la route d'exécution (pour taguer le
  * résultat) et par l'UI (pour ne jamais présenter une simple confirmation

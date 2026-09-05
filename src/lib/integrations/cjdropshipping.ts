@@ -7,10 +7,23 @@
 // et recommendations.ts), jusqu'ici jamais alimenté en production faute de
 // connecteur réel.
 //
-// ⚠️ CE CONNECTEUR N'ÉCRIT JAMAIS SUR SHOPIFY NI SUR CJ — lecture seule,
-// utilisé uniquement pour informer un humain (voir executeReviewSupplier,
-// api/actions/[id]/execute/route.ts). Toute correction de stock reste une
-// décision manuelle du marchand.
+// ⚠️ CE CONNECTEUR N'ÉCRIT JAMAIS SUR CJ — lecture seule côté CJ, à 100 %.
+// Il n'écrit pas non plus sur Shopify DE SA PROPRE INITIATIVE : aucune tâche
+// planifiée ne pousse un stock CJ vers Shopify sans action du marchand.
+//
+// CORRECTIF 05/09/2026 v2 — nuance ajoutée après un premier passage
+// entièrement lecture seule : quand le marchand clique explicitement
+// "Vérifier le fournisseur" (mission review_supplier, voir
+// executeReviewSupplier/checkCjStock dans api/actions/[id]/execute/route.ts)
+// et que CJ confirme un stock réel pour une variante affichée à 0 sur
+// Shopify (vraie rupture), OnDeal corrige alors réellement ce stock sur
+// Shopify — décision explicite de l'utilisateur, prise après lui avoir
+// présenté l'alternative (correction planifiée sans clic, écartée). Le
+// déclenchement reste toujours un clic humain ; seul l'EFFET de ce clic a
+// changé (avant : rafraîchissait juste Variant.supplierStock affiché ;
+// maintenant : corrige aussi Shopify si les conditions ci-dessus sont
+// réunies). Jamais l'inverse (diminuer un stock existant sur la seule foi
+// du chiffre fournisseur) — voir checkCjStock pour le détail des garde-fous.
 //
 // CORRECTIF PRODUCTION (05/09/2026) — la première connexion réelle a échoué
 // ("Le fournisseur a refusé ces identifiants") : la version initiale de ce
