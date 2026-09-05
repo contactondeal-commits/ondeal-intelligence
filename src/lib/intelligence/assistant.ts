@@ -7,12 +7,35 @@ import type { AssistantAnswer, RecommendationView, StockAnalysis } from "@/types
 // PAR-DESSUS ce même contexte de données (jamais un accès direct au store) —
 // voir formatWithLLM ci-dessous.
 
+// LOT 10 (05/09/2026) — Copilot contextuel. Quand la question est posée
+// depuis (ou à propos d') une fiche produit précise, le contexte de CE
+// produit est injecté ici — jamais recalculé avec une seconde formule :
+// mêmes données déjà persistées (ScoreSnapshot) et mêmes modules purs que
+// la fiche Product Intelligence (lot 9 : `productSales.ts`) et `/pricing`
+// (`margin.ts`/`costs.ts`), résolus une seule fois côté route API.
+export interface PageProductContext {
+  id: string;
+  title: string;
+  score: number | null;
+  dataCompleteness: number | null;
+  marginGatedByPlan: boolean; // true si le plan de la boutique n'inclut pas "pricing" — jamais affiché en clair dans ce cas
+  costedVariants: number;
+  totalVariants: number;
+  avgMarginRatePct: number | null; // null si aucune variante costée, ou si gating de plan
+  stockTotal: number | null;
+  salesWindowDays: number;
+  salesUnitsSold: number;
+  salesRevenue: number;
+  salesTrendLabel: string | null; // null si historique insuffisant — jamais un delta inventé
+}
+
 export interface AssistantContext {
   recommendations: RecommendationView[];
   stock: StockAnalysis[];
   productsWithoutReviews: Array<{ productId: string; title: string }>;
   salesTrendAvailable: boolean;
   storeName: string;
+  pageProduct: PageProductContext | null;
 }
 
 interface Intent {
@@ -22,6 +45,46 @@ interface Intent {
 }
 
 const INTENTS: Intent[] = [
+  {
+    // Placé EN PREMIER : une question qui référence explicitement "ce
+    // produit"/"cette fiche" doit gagner face à des intentions génériques
+    // plus larges (ex. "quelle est la marge de ce produit ?" contiendrait
+    // aussi "produit" + "marge", qui matcherait sinon `margin_bad` avant
+    // d'atteindre celle-ci — l'ordre du tableau fait foi, `matchIntent`
+    // retourne la première correspondance).
+    key: "current_product_summary",
+    patterns: [/\bce produit\b/i, /\bcette fiche\b/i, /\bce produit[- ]ci\b/i, /\bcette page\b/i],
+    build: (ctx) => {
+      const p = ctx.pageProduct;
+      if (!p) {
+        return {
+          answer:
+            "Vous n'êtes pas actuellement sur une fiche produit précise, je ne peux donc pas savoir à quel produit « ce produit » fait référence. Ouvrez la fiche du produit concerné (Product Intelligence) puis reposez la question, ou indiquez son nom directement.",
+          dataPoints: { available: false },
+        };
+      }
+      const lines = [`Fiche consultée : ${p.title}`];
+      lines.push(
+        p.score !== null
+          ? `Score OnDeal : ${p.score}/100 (${p.dataCompleteness}% de données disponibles)`
+          : "Score OnDeal : pas encore calculé pour ce produit.",
+      );
+      if (p.marginGatedByPlan) {
+        lines.push("Marge : disponible avec le plan Pro et supérieur.");
+      } else if (p.avgMarginRatePct !== null) {
+        lines.push(`Marge brute moyenne : ${p.avgMarginRatePct.toFixed(1)} % (${p.costedVariants}/${p.totalVariants} variante(s) avec coût réel connu).`);
+      } else {
+        lines.push(`Marge : non calculable — aucune des ${p.totalVariants} variante(s) n'a de coût fournisseur renseigné.`);
+      }
+      lines.push(p.stockTotal !== null ? `Stock total : ${p.stockTotal}` : "Stock total : inconnu.");
+      lines.push(
+        p.salesTrendLabel
+          ? `Ventes sur ${p.salesWindowDays} j : ${p.salesUnitsSold} unité(s), ${p.salesRevenue.toFixed(2)} € (${p.salesTrendLabel} vs la période précédente).`
+          : `Ventes sur ${p.salesWindowDays} j : ${p.salesUnitsSold} unité(s), ${p.salesRevenue.toFixed(2)} € — historique insuffisant sur la période précédente pour afficher une évolution fiable.`,
+      );
+      return { answer: lines.join("\n"), dataPoints: { productId: p.id } };
+    },
+  },
   {
     key: "today_priorities",
     patterns: [/faire aujourd'?hui/i, /10 priorit/i, /par où commencer/i],

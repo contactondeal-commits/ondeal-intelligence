@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { Search, RefreshCw, Plug, LogOut, Bot, CornerDownLeft } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { NAV_ICONS } from "@/components/icons";
@@ -37,6 +37,16 @@ export default function CommandBar({
   canSync: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  // LOT 10 (05/09/2026) — quand ⌘K est ouvert depuis une fiche produit
+  // (`/products/[id]`), le Copilot reçoit ce produit comme contexte : la
+  // question tapée peut alors référencer "ce produit" et obtenir une
+  // réponse sur les vraies données de CE produit (voir assistant.ts).
+  // Une simple lecture du chemin courant — aucune logique dupliquée.
+  const currentProductId = useMemo(() => {
+    const m = pathname?.match(/^\/products\/([^/?]+)/);
+    return m ? m[1] : null;
+  }, [pathname]);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -109,7 +119,16 @@ export default function CommandBar({
 
   const askCopilot: CommandEntry | null =
     q.length > 2
-      ? { key: "ask-copilot", label: `Demander au Copilot : "${query.trim()}"`, group: "Copilot", icon: Bot, run: () => go(`/assistant?q=${encodeURIComponent(query.trim())}`) }
+      ? {
+          key: "ask-copilot",
+          label: `Demander au Copilot : "${query.trim()}"`,
+          group: "Copilot",
+          icon: Bot,
+          run: () =>
+            go(
+              `/assistant?q=${encodeURIComponent(query.trim())}${currentProductId ? `&productId=${encodeURIComponent(currentProductId)}` : ""}`,
+            ),
+        }
       : null;
 
   const results = askCopilot ? [...filtered, askCopilot] : filtered;

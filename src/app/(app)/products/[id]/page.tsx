@@ -130,6 +130,16 @@ export default async function ProductDetailPage({
           <h1 className="page-title">{product.title}</h1>
           <p className="page-subtitle">{product.productType ?? "Catégorie non renseignée"} · statut Shopify : {product.status}</p>
         </div>
+        {/* LOT 10 (05/09/2026) — Copilot contextuel : entrée directe vers
+            l'assistant AVEC ce produit déjà en contexte, pour des questions
+            comme "quelle est la marge de ce produit ?" sans avoir à le
+            renommer. Réservé au plan qui inclut le module (même gating que
+            /assistant lui-même) — jamais un lien mort vers une page bloquée. */}
+        {hasFeature(store.plan, "assistant") && (
+          <Link className="btn btn-secondary" href={`/assistant?store=${store.id}&productId=${product.id}`}>
+            Demander au Copilot à propos de ce produit
+          </Link>
+        )}
       </div>
 
       <div className="grid grid-3" style={{ marginBottom: 20 }}>

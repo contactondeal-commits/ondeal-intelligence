@@ -1,4 +1,5 @@
 import { requireStore } from "@/lib/store-context";
+import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import FeatureUnavailable from "@/components/FeatureUnavailable";
 import { hasFeature } from "@/lib/plan-limits";
@@ -15,8 +16,13 @@ const SUGGESTED_QUESTIONS = [
   "Donne-moi mes 10 priorités.",
 ];
 
-export default async function AssistantPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
-  const store = await requireStore(await searchParams);
+export default async function AssistantPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ store?: string; q?: string; productId?: string }>;
+}) {
+  const sp = await searchParams;
+  const store = await requireStore(sp);
   if (!hasFeature(store.plan, "assistant")) {
     return (
       <AppShell store={store} active="/assistant">
@@ -25,6 +31,16 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
     );
   }
 
+  // LOT 10 (05/09/2026) — Copilot contextuel : la barre de commande ou une
+  // fiche produit peuvent amener ici avec une question pré-remplie (`q`,
+  // corrigeait un vrai bug — ce paramètre était jusqu'ici silencieusement
+  // ignoré par cette page) et/ou un produit de contexte (`productId`).
+  // Toujours revérifié comme appartenant à CETTE boutique avant d'être
+  // affiché ou transmis — jamais fait confiance à la seule query string.
+  const contextProduct = sp.productId
+    ? await prisma.product.findFirst({ where: { id: sp.productId, storeId: store.id }, select: { id: true, title: true } })
+    : null;
+
   return (
     <AppShell store={store} active="/assistant">
       <h1 className="page-title">Demandez à OnDeal Intelligence</h1>
@@ -32,7 +48,12 @@ export default async function AssistantPage({ searchParams }: { searchParams: Pr
         Répond uniquement à partir de vos données réelles déjà calculées. Ne prétend jamais avoir accès à une
         donnée indisponible.
       </p>
-      <AssistantChat storeId={store.id} suggested={SUGGESTED_QUESTIONS} />
+      <AssistantChat
+        storeId={store.id}
+        suggested={SUGGESTED_QUESTIONS}
+        initialQuestion={sp.q ?? null}
+        contextProduct={contextProduct}
+      />
     </AppShell>
   );
 }
