@@ -187,6 +187,39 @@ export interface DeferredMeasurement {
 export const DEFERRED_WINDOW_DAYS = 14;
 export const DEFERRED_MIN_UNITS_PER_WINDOW = 30;
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Vrai seulement si la fenêtre "après" (durée `windowDays` depuis
+ * `executedAt`) est ENTIÈREMENT écoulée. Sans cette garde, un delta calculé
+ * sur une fenêtre partielle serait trompeur : "0 vente après" le jour même
+ * de l'action ne veut rien dire de la même façon qu'"0 vente après 14 jours
+ * complets" — la première n'est pas un manque de volume, seulement un
+ * manque de temps.
+ */
+export function isDeferredWindowElapsed(executedAt: Date, windowDays: number, now: Date): boolean {
+  return now.getTime() >= executedAt.getTime() + windowDays * MS_PER_DAY;
+}
+
+/**
+ * Mesure honnête à afficher tant que la fenêtre "après" n'est pas terminée
+ * — distincte du repli générique d'`assessDeferredMeasurement` (qui dit
+ * "pas assez d'unités vendues") : ici, la vraie raison est "pas encore
+ * assez de temps", jamais confondue avec un manque de volume réel.
+ */
+export function pendingWindowMeasurement(executedAt: Date, windowDays: number, minUnitsPerWindow: number, now: Date): DeferredMeasurement {
+  const afterWindowEnd = new Date(executedAt.getTime() + windowDays * MS_PER_DAY);
+  const daysElapsed = Math.max(0, Math.floor((now.getTime() - executedAt.getTime()) / MS_PER_DAY));
+  return {
+    status: "insufficient_data",
+    windowDays,
+    unitsBefore: null,
+    unitsAfter: null,
+    minUnitsPerWindow,
+    reason: `Fenêtre d'observation après action pas encore terminée (${daysElapsed}/${windowDays} j écoulé(s)) — repassez après le ${afterWindowEnd.toLocaleDateString("fr-FR")} pour voir l'effet réel sur les ventes.`,
+  };
+}
+
 export function measurePriceOutcome(input: {
   prediction: PricePrediction;
   appliedPrice: number;

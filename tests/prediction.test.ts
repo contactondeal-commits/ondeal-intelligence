@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { buildPricePrediction, isPricePrediction, measurePriceOutcome, assessDeferredMeasurement } from "@/lib/intelligence/prediction";
+import {
+  buildPricePrediction,
+  isPricePrediction,
+  measurePriceOutcome,
+  assessDeferredMeasurement,
+  isDeferredWindowElapsed,
+  pendingWindowMeasurement,
+  DEFERRED_WINDOW_DAYS,
+  DEFERRED_MIN_UNITS_PER_WINDOW,
+} from "@/lib/intelligence/prediction";
 import type { ResolvedCostInputs } from "@/lib/intelligence/costs";
 
 // Variante réelle de la boutique (Military Tactical Dog Harness — Red / M) :
@@ -92,5 +101,40 @@ describe("assessDeferredMeasurement — seuil statistique minimal avant toute co
   it("disponible seulement quand les deux fenêtres atteignent le seuil", () => {
     const r = assessDeferredMeasurement({ unitsBefore: 35, unitsAfter: 31 });
     expect(r.status).toBe("available");
+  });
+});
+
+describe("isDeferredWindowElapsed — a-t-on seulement laissé le temps aux vraies commandes d'arriver ?", () => {
+  const executedAt = new Date("2026-08-01T00:00:00Z");
+
+  it("faux tant que la fenêtre n'est pas écoulée", () => {
+    expect(isDeferredWindowElapsed(executedAt, 14, new Date("2026-08-10T00:00:00Z"))).toBe(false);
+  });
+
+  it("vrai pile à l'échéance et au-delà", () => {
+    expect(isDeferredWindowElapsed(executedAt, 14, new Date("2026-08-15T00:00:00Z"))).toBe(true);
+    expect(isDeferredWindowElapsed(executedAt, 14, new Date("2026-09-01T00:00:00Z"))).toBe(true);
+  });
+});
+
+describe("pendingWindowMeasurement — message honnête quand la fenêtre n'est pas encore écoulée", () => {
+  it("reste insufficient_data, sans avant/après inventés, et compte les jours réellement écoulés", () => {
+    const executedAt = new Date("2026-08-01T00:00:00Z");
+    const now = new Date("2026-08-08T00:00:00Z");
+    const r = pendingWindowMeasurement(executedAt, DEFERRED_WINDOW_DAYS, DEFERRED_MIN_UNITS_PER_WINDOW, now);
+    expect(r.status).toBe("insufficient_data");
+    expect(r.unitsBefore).toBeNull();
+    expect(r.unitsAfter).toBeNull();
+    expect(r.windowDays).toBe(DEFERRED_WINDOW_DAYS);
+    expect(r.minUnitsPerWindow).toBe(DEFERRED_MIN_UNITS_PER_WINDOW);
+    expect(r.reason).toContain("7/14");
+    expect(r.reason).toContain("15/08/2026");
+  });
+
+  it("n'affiche jamais un compte de jours négatif si now précède executedAt", () => {
+    const executedAt = new Date("2026-08-01T00:00:00Z");
+    const now = new Date("2026-07-30T00:00:00Z");
+    const r = pendingWindowMeasurement(executedAt, 14, 30, now);
+    expect(r.reason).toContain("0/14");
   });
 });

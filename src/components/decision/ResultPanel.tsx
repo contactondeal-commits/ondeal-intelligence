@@ -77,7 +77,14 @@ function buildStages(phase: "done-success" | "done-failed" | "stale", result: Di
           }
         : { key: "gap", label: "Écart", value: "—", sub: "aucune prédiction", state: "unavailable" },
       m
-        ? { key: "next", label: "Prochaine mesure", value: m.deferred.status === "available" ? "Ventes comparables" : "Ventes : insuffisant", sub: `${m.deferred.windowDays} j avant / après`, state: m.deferred.status === "available" ? "done" : "pending", tag: "unavailable" }
+        ? {
+            key: "next",
+            label: m.deferred.status === "available" ? "Effet réel sur les ventes" : "Prochaine mesure",
+            value: m.deferred.status === "available" ? "Ventes comparées" : "Ventes : insuffisant",
+            sub: `${m.deferred.windowDays} j avant / après`,
+            state: m.deferred.status === "available" ? "done" : "pending",
+            tag: m.deferred.status === "available" ? "real" : "unavailable",
+          }
         : { key: "next", label: "Prochaine mesure", value: "—", state: "unavailable" },
     ];
   }
@@ -119,6 +126,10 @@ function StageIcon({ state }: { state: StageState }) {
 }
 
 function MeasurementDetail({ m }: { m: PriceOutcomeMeasurement }) {
+  const d = m.deferred;
+  // Delta en % — jamais calculé si "avant" est à 0 (division par zéro) ; le
+  // statut "available" garantit déjà unitsBefore >= le seuil minimal, donc > 0 ici.
+  const deltaUnitsPct = d.status === "available" && d.unitsBefore !== null && d.unitsBefore > 0 && d.unitsAfter !== null ? ((d.unitsAfter - d.unitsBefore) / d.unitsBefore) * 100 : null;
   return (
     <div className="measurement">
       <div className="measurement-title">Prédiction et résultat structurel</div>
@@ -165,7 +176,10 @@ function MeasurementDetail({ m }: { m: PriceOutcomeMeasurement }) {
       </table>
       <div className={`measurement-verdict ${m.gap.structuralMatch ? "is-match" : "is-gap"}`}>{m.gap.explanation}</div>
       <div className="measurement-deferred">
-        <DataTag status="unavailable" compact /> Effet sur les ventes : {m.deferred.reason}
+        <DataTag status={d.status === "available" ? "real" : "unavailable"} compact /> Effet sur les ventes ({d.windowDays} j avant/après) :{" "}
+        {d.status === "available"
+          ? `${d.unitsBefore} → ${d.unitsAfter} unité(s) vendue(s)${deltaUnitsPct !== null ? ` (${deltaUnitsPct >= 0 ? "+" : ""}${deltaUnitsPct.toFixed(0)} %)` : ""}`
+          : d.reason}
       </div>
     </div>
   );

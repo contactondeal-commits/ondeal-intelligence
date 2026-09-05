@@ -7,6 +7,7 @@ import BackButton from "@/components/BackButton";
 import DecisionCard from "@/components/DecisionCard";
 import { groupRecommendations, type GroupableRecommendation, type RecommendationGroup } from "@/lib/intelligence/group";
 import { lightenGroup } from "@/lib/intelligence/groupTransport";
+import { fetchDeferredPriceMeasurement } from "@/lib/intelligence/measurementEvidence";
 
 const CATEGORY_LABEL: Record<string, string> = {
   margin: "Marge",
@@ -90,6 +91,31 @@ export default async function DecisionWorkspacePage({
       executedAt: a.executedAt?.toISOString() ?? null,
     };
   }
+
+  // Lot 8 (05/09/2026) — Impact réel vs estimé : pour une action de prix
+  // déjà exécutée, la mesure comptable (measurement) est persistée telle
+  // quelle depuis l'exécution, mais son sous-champ `deferred` (effet réel
+  // sur les ventes) y est figé pour toujours à "insufficient_data" — à
+  // l'instant de l'exécution, "après" n'existe pas encore. On le RECALCULE
+  // ici, en direct, à partir des vraies commandes reçues depuis, à chaque
+  // consultation de cette page — jamais stocké, jamais une tâche de fond.
+  await Promise.all(
+    Object.values(actionsByRecommendation)
+      .filter((a) => a.status === "EXECUTED" && a.type === "update_price" && a.resultJson && a.executedAt)
+      .map(async (a) => {
+        try {
+          const parsed = JSON.parse(a.resultJson!) as Record<string, unknown>;
+          const measurement = parsed.measurement as Record<string, unknown> | undefined;
+          const variantId = typeof a.payload.variantId === "string" ? a.payload.variantId : null;
+          if (!measurement || !variantId) return;
+          const deferred = await fetchDeferredPriceMeasurement({ storeId: store.id, variantId, executedAt: new Date(a.executedAt!) });
+          parsed.measurement = { ...measurement, deferred };
+          a.resultJson = JSON.stringify(parsed);
+        } catch {
+          // resultJson illisible ou mesure absente : enrichissement optionnel, jamais un plantage de la page pour ça.
+        }
+      }),
+  );
 
   const backHref = `/intelligence?store=${store.id}`;
 
