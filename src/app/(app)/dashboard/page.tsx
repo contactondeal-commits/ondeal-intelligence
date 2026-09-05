@@ -14,7 +14,19 @@ import { lightenGroup } from "@/lib/intelligence/groupTransport";
 import { derivePhaseFromExistingAction } from "@/lib/intelligence/decision";
 import { actionKindFor } from "@/lib/intelligence/actionKind";
 import { isPricePrediction } from "@/lib/intelligence/prediction";
+import {
+  WHAT_CHANGED_WINDOWS,
+  parseWhatChangedWindow,
+  aggregateWindow,
+  computeTrend,
+  marginRateDeltaPts,
+  computeScoreTrend,
+  type MarginSnapshotRow,
+  type WhatChangedWindow,
+} from "@/lib/intelligence/whatChanged";
 import type { ScoreBreakdown } from "@/types";
+
+const WINDOW_LABEL: Record<WhatChangedWindow, string> = { 7: "7 jours", 30: "30 jours", 90: "90 jours" };
 
 const PHASE_LABEL: Record<string, { label: string; tone: string }> = {
   confirm: { label: "À valider", tone: "warning" },
@@ -68,14 +80,22 @@ function eur(v: number | null): string {
  * que des données réelles (ou « indisponible ») ; aucune courbe n'est
  * dessinée sans série réelle.
  */
-export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ store?: string }> }) {
-  const store = await requireStore(await searchParams);
+export default async function DashboardPage({ searchParams }: { searchParams: Promise<{ store?: string; window?: string }> }) {
+  const params = await searchParams;
+  const store = await requireStore(params);
   const now = Date.now();
-  const since30d = new Date(now - 30 * 24 * 60 * 60 * 1000);
-  const since60d = new Date(now - 60 * 24 * 60 * 60 * 1000);
+  const nowDate = new Date(now);
   const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000);
 
-  const [user, productCount, integrations, lastAnalysis, recommendations, latestScores, stockAgg, orders30, orders60, lines30, daily30, noReviewCount, actionsRecent, actionCounts, recentEvents] =
+  // « Qu'est-ce qui a changé » (05/09/2026, lot 6) — une seule fenêtre
+  // choisie dans l'URL gouverne à la fois le score de santé et la
+  // performance ci-dessous, pour une comparaison cohérente sur toute la
+  // page plutôt que des fenêtres différentes par bloc.
+  const windowDays = parseWhatChangedWindow(params.window);
+  const sinceWindow = new Date(now - windowDays * 24 * 60 * 60 * 1000);
+  const sincePrevWindow = new Date(now - 2 * windowDays * 24 * 60 * 60 * 1000);
+
+  const [user, productCount, integrations, lastAnalysis, recommendations, latestScores, historicalScores, stockAgg, marginRows, noReviewCount, actionsRecent, actionCounts, recentEvents] =
     await Promise.all([
       prisma.user.findUnique({ where: { id: store.userId }, select: { name: true } }),
       prisma.product.count({ where: { storeId: store.id } }),
@@ -86,10 +106,24 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         include: { product: { select: { id: true, title: true } } },
         orderBy: [{ severity: "asc" }, { confidence: "desc" }],
       }),
-      prisma.$queryRaw<Array<{ score: number; factorsJson: string }>>(Prisma.sql`
-        SELECT s.score, s."factorsJson" FROM score_snapshots s
+      prisma.$queryRaw<Array<{ productId: string; score: number; factorsJson: string }>>(Prisma.sql`
+        SELECT s."productId", s.score, s."factorsJson" FROM score_snapshots s
         WHERE s."storeId" = ${store.id}
           AND s."computedAt" = (SELECT MAX(s2."computedAt") FROM score_snapshots s2 WHERE s2."storeId" = ${store.id} AND s2."productId" = s."productId")
+      `),
+      // Historique de santé (« Qu'est-ce qui a changé », lot 6) : pour
+      // chaque produit, son score le plus récent AU PLUS TARD à la date
+      // cible (aujourd'hui − windowDays) — jamais le score actuel réutilisé
+      // à tort. Un produit sans aucun snapshot avant cette date n'apparaît
+      // simplement pas (voir computeScoreTrend, comparaison produit par
+      // produit uniquement sur l'intersection des deux dates).
+      prisma.$queryRaw<Array<{ productId: string; score: number }>>(Prisma.sql`
+        SELECT s."productId", s.score FROM score_snapshots s
+        WHERE s."storeId" = ${store.id}
+          AND s."computedAt" = (
+            SELECT MAX(s2."computedAt") FROM score_snapshots s2
+            WHERE s2."storeId" = ${store.id} AND s2."productId" = s."productId" AND s2."computedAt" <= ${sinceWindow}
+          )
       `),
       prisma.$queryRaw<Array<{ known: number | bigint; ruptureVariants: number | bigint; ruptureProducts: number | bigint }>>(Prisma.sql`
         SELECT SUM(CASE WHEN v."inventoryQuantity" IS NOT NULL THEN 1 ELSE 0 END) AS known,
@@ -97,10 +131,19 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
                COUNT(DISTINCT CASE WHEN v."inventoryQuantity" = 0 THEN v."productId" END) AS "ruptureProducts"
         FROM variants v JOIN products p ON p.id = v."productId" WHERE p."storeId" = ${store.id}
       `),
-      prisma.order.aggregate({ where: { storeId: store.id, cancelledAt: null, createdAtShopify: { gte: since30d } }, _count: true, _sum: { totalPrice: true } }),
-      prisma.order.aggregate({ where: { storeId: store.id, cancelledAt: null, createdAtShopify: { gte: since60d, lt: since30d } }, _count: true, _sum: { totalPrice: true } }),
-      prisma.orderLine.aggregate({ where: { order: { storeId: store.id, cancelledAt: null, createdAtShopify: { gte: since30d } } }, _sum: { quantity: true, discountedTotal: true } }),
-      prisma.salesSnapshot.groupBy({ by: ["date"], where: { product: { storeId: store.id }, date: { gte: since30d } }, _sum: { revenue: true, unitsSold: true }, orderBy: { date: "asc" } }),
+      // Performance & « Qu'est-ce qui a changé » (lot 6) : une seule requête
+      // couvrant la fenêtre courante ET la fenêtre précédente, sur
+      // MarginSnapshot — agrégat quotidien déjà réel (CA, marge sur la part
+      // à coût connu, commandes, unités), reconstruit à chaque
+      // synchronisation (voir rebuildMarginSnapshots). Remplace les
+      // anciennes requêtes Order/OrderLine/SalesSnapshot séparées : une
+      // seule source pour le CA, les commandes, les unités, la marge ET le
+      // graphique, jamais deux calculs qui pourraient diverger.
+      prisma.marginSnapshot.findMany({
+        where: { storeId: store.id, date: { gte: sincePrevWindow } },
+        select: { date: true, revenue: true, margin: true, costCoverage: true, orderCount: true, unitsSold: true },
+        orderBy: { date: "asc" },
+      }),
       prisma.product.count({ where: { storeId: store.id, reviews: { none: {} } } }),
       prisma.actionItem.findMany({ where: { storeId: store.id }, orderBy: { createdAt: "desc" }, take: 6, include: { recommendation: { select: { title: true, product: { select: { title: true } } } } } }),
       prisma.actionItem.groupBy({ by: ["status"], where: { storeId: store.id }, _count: true }),
@@ -141,26 +184,37 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
   const factors = [...factorAvg.entries()].map(([key, e]) => ({ key, label: e.label, value: e.n > 0 ? Math.round(e.sum / e.n) : null }));
   const healthLabel = avgScore === null ? "Non disponible" : avgScore >= 70 ? "Bonne" : avgScore >= 50 ? "À améliorer" : "Critique";
 
+  // « Qu'est-ce qui a changé » — santé : comparaison produit par produit
+  // (voir whatChanged.ts), jamais deux moyennes sur des catalogues différents.
+  const scoreTrend = computeScoreTrend(latestScores, historicalScores);
+
   const severityCounts = countBySeverity(recommendations);
   const allGroups = groupRecommendations(recommendations);
   const topGroups = allGroups.slice(0, 3);
   const next = allGroups[0] ?? null;
   const marginSignals = recommendations.filter((r) => r.category === "margin").length;
 
-  // Performance 30 jours — réelle (commandes non annulées) ; tendance seulement si la période précédente a des ventes.
-  const orders30Count = orders30._count;
-  const revenue30 = orders30._sum.totalPrice ?? 0;
-  const units30 = lines30._sum.quantity ?? 0;
-  const prevCount = orders60._count;
-  const prevRevenue = orders60._sum.totalPrice ?? 0;
-  const basket = orders30Count > 0 ? revenue30 / orders30Count : null;
-  // Tendance affichée seulement si la période précédente compte au moins
-  // 10 commandes : « −100 % » calculé sur une seule commande n'est pas une
-  // information, c'est du bruit présenté comme un insight.
-  const MIN_ORDERS_FOR_TREND = 10;
-  const trend = (cur: number, prev: number): string | null =>
-    prevCount >= MIN_ORDERS_FOR_TREND && prev > 0 ? `${cur >= prev ? "+" : ""}${(((cur - prev) / prev) * 100).toFixed(1)} %` : null;
-  const hasChartData = daily30.some((d) => (d._sum.revenue ?? 0) > 0);
+  // Performance & « Qu'est-ce qui a changé » — réelle (commandes non
+  // annulées), sur la fenêtre choisie (7/30/90j) ; tendance affichée
+  // seulement si la période PRÉCÉDENTE a assez de commandes (voir
+  // minOrdersForTrend — un delta calculé sur 1-2 commandes est du bruit
+  // présenté comme un insight, pas une information).
+  const marginRowsTyped: MarginSnapshotRow[] = marginRows.map((r) => ({
+    date: r.date,
+    revenue: r.revenue,
+    margin: r.margin,
+    costCoverage: r.costCoverage,
+    orderCount: r.orderCount,
+    unitsSold: r.unitsSold,
+  }));
+  const perfCurrent = aggregateWindow(marginRowsTyped, sinceWindow, nowDate);
+  const perfPrevious = aggregateWindow(marginRowsTyped, sincePrevWindow, sinceWindow);
+  const revenueTrend = computeTrend(perfCurrent.revenue, perfPrevious.revenue, perfPrevious.orderCount, windowDays);
+  const ordersTrend = computeTrend(perfCurrent.orderCount, perfPrevious.orderCount, perfPrevious.orderCount, windowDays);
+  const marginRateDelta = marginRateDeltaPts(perfCurrent.marginRate, perfPrevious.marginRate);
+  const basket = perfCurrent.orderCount > 0 ? perfCurrent.revenue / perfCurrent.orderCount : null;
+  const daysWithData = marginRowsTyped.filter((r) => r.date.getTime() >= sinceWindow.getTime() && r.orderCount > 0);
+  const hasChartData = daysWithData.length > 0;
 
   const ruptureProducts = Number(stockAgg[0]?.ruptureProducts ?? 0);
   const ruptureVariants = Number(stockAgg[0]?.ruptureVariants ?? 0);
@@ -214,6 +268,21 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
         </div>
       </div>
 
+      {/* « Qu'est-ce qui a changé » (lot 6, 05/09/2026) — une fenêtre unique
+          gouverne la santé et la performance ci-dessous. Liens simples
+          (aucun JS client) : même convention que les autres filtres de
+          l'application (voir /audit-log). */}
+      <div className="filter-tabs" role="group" aria-label="Comparer sur">
+        <span className="cell-sub" style={{ padding: "0 4px", alignSelf: "center" }}>
+          Comparer sur
+        </span>
+        {WHAT_CHANGED_WINDOWS.map((w) => (
+          <a key={w} href={`?store=${store.id}&window=${w}`} className={`filter-tab ${windowDays === w ? "active" : ""}`}>
+            {WINDOW_LABEL[w]}
+          </a>
+        ))}
+      </div>
+
       <div className="cc-row cc-row-3">
         <section className="card cc-card" aria-labelledby="cc-health">
           <h2 id="cc-health" className="cc-card-title">
@@ -224,6 +293,17 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               <HealthRing score={avgScore} size={132} />
               <div className={`health-label ${avgScore === null ? "" : avgScore >= 70 ? "is-ok" : avgScore >= 50 ? "is-warn" : "is-bad"}`}>{healthLabel}</div>
               <div className="health-sub">{latestScores.length.toLocaleString("fr-FR")} produits scorés</div>
+              {scoreTrend.hasEnoughHistory && scoreTrend.deltaPts !== null ? (
+                <div className={`health-trend ${scoreTrend.deltaPts > 0 ? "is-up" : scoreTrend.deltaPts < 0 ? "is-down" : ""}`}>
+                  {scoreTrend.deltaPts > 0 ? "▲" : scoreTrend.deltaPts < 0 ? "▼" : "→"} {scoreTrend.deltaPts > 0 ? "+" : ""}
+                  {scoreTrend.deltaPts} pt{Math.abs(scoreTrend.deltaPts) > 1 ? "s" : ""} sur {WINDOW_LABEL[windowDays]}
+                  <span className="cell-sub"> (était {Math.round(scoreTrend.previousAvg ?? 0)}/100)</span>
+                </div>
+              ) : (
+                <div className="cell-sub">
+                  <DataTag status="unavailable" compact /> Historique insuffisant sur {WINDOW_LABEL[windowDays]}
+                </div>
+              )}
             </div>
             <ul className="health-factors">
               {factors.map((f) => (
@@ -320,21 +400,33 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
             <h2 id="cc-perf" className="cc-card-title">
               Performance globale
             </h2>
-            <span className="cc-card-hint">30 derniers jours · commandes non annulées, remboursements non déduits</span>
+            <span className="cc-card-hint">{WINDOW_LABEL[windowDays]} · commandes non annulées, remboursements non déduits</span>
           </div>
           <div className="kpi-row">
-            <Kpi label="Ventes brutes" value={orders30Count > 0 ? eur(revenue30) : "—"} trend={trend(revenue30, prevRevenue)} tag={orders30Count > 0 ? "real" : "unavailable"} />
-            <Kpi label="Commandes" value={orders30Count.toLocaleString("fr-FR")} trend={trend(orders30Count, prevCount)} tag="real" />
+            <Kpi label="Ventes brutes" value={perfCurrent.orderCount > 0 ? eur(perfCurrent.revenue) : "—"} trend={revenueTrend.label} tag={perfCurrent.orderCount > 0 ? "real" : "unavailable"} />
+            <Kpi label="Commandes" value={perfCurrent.orderCount.toLocaleString("fr-FR")} trend={ordersTrend.label} tag="real" />
             <Kpi label="Panier moyen" value={basket !== null ? eur(basket) : "—"} tag={basket !== null ? "calculated" : "unavailable"} />
-            <Kpi label="Unités vendues" value={units30.toLocaleString("fr-FR")} tag="real" />
+            <Kpi label="Unités vendues" value={perfCurrent.unitsSold.toLocaleString("fr-FR")} tag="real" />
+            <Kpi
+              label="Marge"
+              value={perfCurrent.marginRate !== null ? `${(perfCurrent.marginRate * 100).toFixed(1)} %` : "—"}
+              trend={marginRateDelta !== null ? `${marginRateDelta >= 0 ? "+" : ""}${marginRateDelta.toFixed(1)} pt` : null}
+              tag={perfCurrent.marginRate !== null ? "calculated" : "unavailable"}
+              hint={perfCurrent.marginRate === null ? "Coût fournisseur non renseigné" : undefined}
+            />
             <Kpi label="Conversion" value="—" tag="unavailable" hint="Sessions non intégrées" />
           </div>
           {hasChartData ? (
-            <SalesChart points={daily30.map((d) => ({ date: d.date, revenue: d._sum.revenue ?? 0 }))} />
+            <SalesChart points={daysWithData.map((d) => ({ date: d.date, revenue: d.revenue }))} />
           ) : (
             <div className="chart-empty">
-              <DataTag status="unavailable" compact /> Aucune vente enregistrée sur les 30 derniers jours — la courbe apparaîtra avec les premières commandes.
-              {prevCount > 0 && <span className="cell-sub"> ({prevCount} commande{prevCount > 1 ? "s" : ""} sur les 30 jours précédents)</span>}
+              <DataTag status="unavailable" compact /> Aucune vente enregistrée sur {WINDOW_LABEL[windowDays]} — la courbe apparaîtra avec les premières commandes.
+              {perfPrevious.orderCount > 0 && (
+                <span className="cell-sub">
+                  {" "}
+                  ({perfPrevious.orderCount} commande{perfPrevious.orderCount > 1 ? "s" : ""} sur {WINDOW_LABEL[windowDays]} précédent{windowDays > 1 ? "s" : ""})
+                </span>
+              )}
             </div>
           )}
         </section>
