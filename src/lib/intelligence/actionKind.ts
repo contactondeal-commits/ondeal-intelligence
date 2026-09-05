@@ -30,7 +30,16 @@ import type { PriceOutcomeMeasurement } from "@/lib/intelligence/prediction";
  */
 export type ActionKind = "automated_mutation" | "manual_mission";
 
-export const AUTOMATED_ACTION_TYPES = new Set(["update_price", "unpublish_product", "update_stock"]);
+export const AUTOMATED_ACTION_TYPES = new Set([
+  "update_price",
+  "unpublish_product",
+  "update_stock",
+  // CORRECTIF 05/09/2026 v4 — voir actionTypes.ts : mutation Shopify réelle
+  // (productUpdate, statut ACTIVE/DRAFT/ARCHIVED au choix du marchand),
+  // déclenchée UNIQUEMENT depuis /api/products/[id]/status (jamais par le
+  // moteur de recommandations automatique, qui reste sur "unpublish_product").
+  "set_product_status",
+]);
 
 export function actionKindFor(type: string | null | undefined): ActionKind {
   return type && AUTOMATED_ACTION_TYPES.has(type) ? "automated_mutation" : "manual_mission";
@@ -45,7 +54,6 @@ export function actionKindDescription(kind: ActionKind): string {
     ? "OnDeal effectue réellement cette modification sur Shopify."
     : "OnDeal prépare et explique cette action — vous devez la réaliser vous-même. Confirmer ici enregistre uniquement que la mission a été prise en charge, jamais une mutation Shopify.";
 }
-
 /**
  * Clé de la DONNÉE CRITIQUE modifiée par une ActionItem de ce type — pas une
  * clé arbitraire, une par mutation réellement partagée (le prix vit sur la
@@ -74,6 +82,23 @@ export function criticalTargetKey(type: string | null | undefined, payload: Reco
     // Le stock vit sur la variante — même logique que update_price.
     const variantId = typeof payload.variantId === "string" ? payload.variantId : null;
     return variantId ? `update_stock:variant:${variantId}` : null;
+  }
+  if (type === "set_product_status") {
+    // CORRECTIF 05/09/2026 v4 — même donnée Shopify que "unpublish_product"
+    // (le statut de publication du produit), mais déclenché manuellement
+    // (voir /api/products/[id]/status) plutôt que par le moteur de
+    // recommandations. Clé délibérément DIFFÉRENTE de celle de
+    // "unpublish_product" ci-dessus : la garde anti-doublon (/api/actions et
+    // /api/products/[id]/status) filtre déjà les ActionItem actives par
+    // `type` exact avant de comparer cette clé, donc une clé partagée
+    // n'empêcherait pas réellement une course entre les deux types — angle
+    // mort honnête, documenté plutôt que masqué par une fausse protection :
+    // un « unpublish_product » généré par le moteur ET un clic manuel
+    // « set_product_status » sur le MÊME produit, à la même seconde,
+    // peuvent en théorie coexister (fenêtre très étroite : les deux
+    // exigent une validation humaine explicite).
+    const productId = typeof payload.productId === "string" ? payload.productId : fallbackProductId;
+    return productId ? `set_product_status:product:${productId}` : null;
   }
   if (type === "review_supplier") {
     // La preuve (stock/vélocité) protégée par le snapshot stock vit sur la
