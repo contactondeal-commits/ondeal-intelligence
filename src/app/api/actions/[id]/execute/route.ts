@@ -90,6 +90,9 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       case "unpublish_product":
         result = await executeUnpublish(action.storeId, payload);
         break;
+      case "set_product_status":
+        result = await executeSetProductStatus(action.storeId, payload);
+        break;
       case "update_stock":
         result = await executeUpdateStock(action.storeId, payload);
         break;
@@ -555,6 +558,51 @@ export async function executeUnpublish(storeId: string, payload: Record<string, 
     verification: `Confirmé par la réponse Shopify (statut : ${res.status}).`,
     before: product.status,
     applied: "draft",
+    verified: res.status.toLowerCase(),
+  };
+}
+
+const STATUS_LABEL_FR: Record<"ACTIVE" | "DRAFT" | "ARCHIVED", string> = {
+  ACTIVE: "publié (Actif)",
+  DRAFT: "mis en brouillon",
+  ARCHIVED: "archivé",
+};
+
+/**
+ * CORRECTIF 05/09/2026 v4 — Action manuelle unifiée "Archiver / Mettre en
+ * brouillon / Republier" (voir /api/products/[id]/status), demandée après
+ * constat que l'assistant IA ne pouvait offrir AUCUNE de ces actions (elles
+ * n'existaient nulle part dans l'app — seul Shopify permettait de le faire).
+ * Réutilise exactement la même mutation Shopify que `executeUnpublish`
+ * ci-dessus (`updateProductStatus`, `productUpdate.status`) — jamais une
+ * deuxième implémentation de la mutation — mais accepte n'importe lequel
+ * des 3 statuts Shopify réels, au choix du marchand, au lieu d'un DRAFT
+ * fixe. `executeUnpublish` reste inchangé et continue de servir
+ * exclusivement le moteur de recommandations automatique.
+ */
+export async function executeSetProductStatus(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
+  const productId = payload.productId as string;
+  const targetStatus = payload.targetStatus as string;
+  if (!productId) throw new ExecutionError("Produit manquant dans l'action.");
+  if (targetStatus !== "ACTIVE" && targetStatus !== "DRAFT" && targetStatus !== "ARCHIVED") {
+    throw new ExecutionError("Statut cible invalide — attendu ACTIVE, DRAFT ou ARCHIVED.");
+  }
+  const product = await prisma.product.findFirst({ where: { id: productId, storeId } });
+  if (!product) throw new ExecutionError("Produit introuvable en base — il a peut-être été supprimé depuis la simulation.");
+
+  const creds = await getShopifyCreds(storeId);
+  const res = await updateProductStatus(creds, product.shopifyProductId, targetStatus);
+  if (!res.ok) throw new ExecutionError(res.error);
+
+  await prisma.product.update({ where: { id: productId }, data: { status: res.status.toLowerCase() } });
+
+  return {
+    ok: true,
+    kind: "automated_mutation",
+    detail: `Produit ${STATUS_LABEL_FR[targetStatus]} sur Shopify.`,
+    verification: `Confirmé par la réponse Shopify (statut : ${res.status}).`,
+    before: product.status,
+    applied: targetStatus.toLowerCase(),
     verified: res.status.toLowerCase(),
   };
 }
