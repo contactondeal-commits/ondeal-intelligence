@@ -177,13 +177,15 @@ export async function POST(req: NextRequest) {
       // contrainte "un seul catalogue à la fois" ci-dessus (isCatalogProvider
       // renvoie false pour CJDROPSHIPPING).
       if (!credentials.apiKey) throw new Error("Clé API CJ requise.");
-      const creds: CjCredentials = { apiKey: credentials.apiKey };
-      await verifyCjCredentials(creds);
+      // verifyCjCredentials échange la clé contre un accessToken réel (voir
+      // cjdropshipping.ts) et renvoie les credentials COMPLETS à stocker —
+      // jamais la clé brute seule, qui ne peut pas servir d'en-tête d'appel.
+      const verifiedCreds: CjCredentials = await verifyCjCredentials({ apiKey: credentials.apiKey });
 
       await prisma.integration.upsert({
         where: { storeId_provider: { storeId, provider: "CJDROPSHIPPING" } },
-        create: { storeId, provider: "CJDROPSHIPPING", status: "CONNECTED", encryptedCredentials: encryptJson(creds) },
-        update: { status: "CONNECTED", encryptedCredentials: encryptJson(creds), lastError: null },
+        create: { storeId, provider: "CJDROPSHIPPING", status: "CONNECTED", encryptedCredentials: encryptJson(verifiedCreds) },
+        update: { status: "CONNECTED", encryptedCredentials: encryptJson(verifiedCreds), lastError: null },
       });
     }
   } catch (err) {

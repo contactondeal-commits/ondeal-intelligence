@@ -12,15 +12,30 @@
 // api/actions/[id]/execute/route.ts). Toute correction de stock reste une
 // décision manuelle du marchand.
 //
-// ⚠️ COMME POUR WOOCOMMERCE : CE CONNECTEUR N'A PU ÊTRE VÉRIFIÉ QU'AVEC UNE
-// VRAIE CLÉ API CJ, PAS AVEC UNE BOUTIQUE DE DÉMO — construit à partir de la
-// documentation officielle (developers.cjdropshipping.com /
-// developers.cjdropshipping.cn) uniquement. La première utilisation réelle
-// doit être suivie attentivement avant de faire confiance aux données
-// renvoyées.
-
+// CORRECTIF PRODUCTION (05/09/2026) — la première connexion réelle a échoué
+// ("Le fournisseur a refusé ces identifiants") : la version initiale de ce
+// connecteur envoyait directement la clé API du tableau de bord CJ (`My CJ >
+// Authorization > API`) comme en-tête `CJ-Access-Token`. Ce n'est PAS ce que
+// l'API attend — confirmé par relecture de la doc officielle
+// (developers.cjdropshipping.com/en/api/api2/api/auth.html) : cette clé
+// (`apiKey`) doit d'abord être échangée contre un `accessToken` temporaire
+// via `POST /authentication/getAccessToken`, et c'est CET accessToken (valide
+// 15 jours, renouvelable via `refreshToken` valide 180 jours) qui sert
+// d'en-tête `CJ-Access-Token` pour tous les appels suivants. La clé du
+// tableau de bord elle-même ne change jamais et ne sert qu'à (re)dériver un
+// accessToken — voir `cjdropshipping-token.ts` pour le rafraîchissement
+// automatique côté appelant (mêmes principes que `shopify-token.ts`).
 export interface CjCredentials {
+  /** Clé générée dans My CJ > Authorization > API — ne change jamais, jamais utilisée directement comme en-tête d'appel. */
   apiKey: string;
+  /** Jeton temporaire réellement utilisé pour l'en-tête CJ-Access-Token — absent avant la toute première connexion. */
+  accessToken?: string;
+  /** Epoch ms — horodatage d'expiration RÉEL renvoyé par CJ (accessTokenExpiryDate), jamais estimé. */
+  accessTokenExpiresAt?: number;
+  /** Permet de renouveler l'accessToken sans repasser par apiKey (mais apiKey reste le filet de sécurité — voir cjdropshipping-token.ts). */
+  refreshToken?: string;
+  /** Epoch ms — horodatage d'expiration RÉEL du refreshToken (180 jours documentés). */
+  refreshTokenExpiresAt?: number;
 }
 
 export class CjApiError extends Error {
@@ -47,15 +62,15 @@ interface CjEnvelope<T> {
   requestId?: string;
 }
 
-async function apiRequest<T>(creds: CjCredentials, path: string, params: Record<string, string> = {}): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`);
-  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-
+/** Un seul point d'appel HTTP, avec retry/backoff sur 429 — partagé par l'auth et les endpoints "métier". */
+async function cjFetch<T>(url: string, init: RequestInit): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const res = await fetch(url.toString(), { headers: { "CJ-Access-Token": creds.apiKey } });
+      const res = await fetch(url, init);
       if (res.status === 429) {
+        // Rate limit documenté : 1 requête/seconde (QPS=1) sur l'auth comme
+        // sur les endpoints produit — backoff avant de réessayer.
         await sleep(attempt * 1000);
         continue;
       }
@@ -76,13 +91,82 @@ async function apiRequest<T>(creds: CjCredentials, path: string, params: Record<
   throw lastError instanceof Error ? lastError : new CjApiError("Échec de connexion à CJdropshipping.");
 }
 
-/** Vérifie la clé API (utilisé lors de la connexion) — un appel léger, en lecture seule. */
-export async function verifyCjCredentials(creds: CjCredentials): Promise<{ ok: true }> {
+async function apiRequest<T>(accessToken: string, path: string, params: Record<string, string> = {}): Promise<T> {
+  const url = new URL(`${API_BASE}${path}`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  return cjFetch<T>(url.toString(), { headers: { "CJ-Access-Token": accessToken } });
+}
+
+export interface CjTokenBundle {
+  accessToken: string;
+  accessTokenExpiresAt: number;
+  refreshToken: string;
+  refreshTokenExpiresAt: number;
+}
+
+interface CjAuthResponseData {
+  accessToken: string;
+  accessTokenExpiryDate: string;
+  refreshToken: string;
+  refreshTokenExpiryDate: string;
+}
+
+function toBundle(data: CjAuthResponseData): CjTokenBundle {
+  return {
+    accessToken: data.accessToken,
+    accessTokenExpiresAt: new Date(data.accessTokenExpiryDate).getTime(),
+    refreshToken: data.refreshToken,
+    refreshTokenExpiresAt: new Date(data.refreshTokenExpiryDate).getTime(),
+  };
+}
+
+/**
+ * Échange la clé API du tableau de bord CJ (My CJ > Authorization > API)
+ * contre un accessToken temporaire — SEUL moyen documenté d'obtenir un jeton
+ * utilisable comme en-tête CJ-Access-Token. À appeler lors de la connexion
+ * initiale, et comme filet de sécurité si le renouvellement par
+ * refreshToken échoue (voir cjdropshipping-token.ts) — la clé du tableau de
+ * bord ne change jamais, contrairement à un jeton OAuth classique.
+ */
+export async function requestCjAccessToken(apiKey: string): Promise<CjTokenBundle> {
+  const data = await cjFetch<CjAuthResponseData>(`${API_BASE}/authentication/getAccessToken`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ apiKey }),
+  });
+  return toBundle(data);
+}
+
+/** Renouvelle un accessToken proche de l'expiration (15 jours) via le refreshToken (180 jours), sans nouvelle demande de clé. */
+export async function refreshCjAccessToken(refreshToken: string): Promise<CjTokenBundle> {
+  const data = await cjFetch<CjAuthResponseData>(`${API_BASE}/authentication/refreshAccessToken`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ refreshToken }),
+  });
+  return toBundle(data);
+}
+
+/**
+ * Vérifie la clé API (utilisé lors de la connexion) — échange réellement la
+ * clé contre un accessToken puis confirme qu'il fonctionne avec un appel
+ * léger en lecture seule. Retourne les credentials COMPLETS (avec le
+ * nouveau bundle de jetons) à persister par l'appelant — jamais seulement
+ * la clé d'origine.
+ */
+export async function verifyCjCredentials(creds: CjCredentials): Promise<CjCredentials> {
+  const bundle = await requestCjAccessToken(creds.apiKey);
   // Aucun endpoint "whoami" documenté publiquement : la liste de produits,
   // page 1 / taille 1, sert de vérification en lecture seule la plus légère
-  // disponible — une clé invalide échoue avec un statut/erreur explicite.
-  await apiRequest<unknown>(creds, "/product/list", { pageNum: "1", pageSize: "1" });
-  return { ok: true };
+  // disponible — un accessToken invalide échoue avec un statut/erreur explicite.
+  await apiRequest<unknown>(bundle.accessToken, "/product/list", { pageNum: "1", pageSize: "1" });
+  return {
+    apiKey: creds.apiKey,
+    accessToken: bundle.accessToken,
+    accessTokenExpiresAt: bundle.accessTokenExpiresAt,
+    refreshToken: bundle.refreshToken,
+    refreshTokenExpiresAt: bundle.refreshTokenExpiresAt,
+  };
 }
 
 interface CjWarehouseStock {
@@ -117,9 +201,16 @@ export interface CjVariantStock {
  * que l'app CJ écrit dans Shopify, ex. "CJXFZNZN00277-Blue LBS foreign
  * language"). Retourne `null` si CJ ne connaît pas ce SKU (jamais une
  * valeur inventée) — l'appelant décide alors quoi afficher.
+ *
+ * Nécessite un `accessToken` déjà valide dans `creds` — l'appelant doit
+ * passer par `getFreshCjCredentials` (cjdropshipping-token.ts), jamais
+ * décrypter des credentials CJ bruts directement.
  */
 export async function queryCjVariantStock(creds: CjCredentials, variantSku: string): Promise<CjVariantStock | null> {
-  const data = await apiRequest<CjProductQueryResult>(creds, "/product/query", { variantSku });
+  if (!creds.accessToken) {
+    throw new CjApiError("Jeton d'accès CJdropshipping manquant — reconnectez l'intégration (Paramètres > Intégrations).");
+  }
+  const data = await apiRequest<CjProductQueryResult>(creds.accessToken, "/product/query", { variantSku });
   const variant = data.variants?.find((v) => v.variantSku === variantSku);
   if (!variant || !variant.inventories || variant.inventories.length === 0) return null;
 

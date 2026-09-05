@@ -5,7 +5,7 @@ import { logAudit } from "@/lib/audit";
 import { updateVariantPrice, updateProductStatus, type ShopifyCredentials } from "@/lib/integrations/shopify";
 import { getFreshShopifyCredentials } from "@/lib/integrations/shopify-token";
 import { queryCjVariantStock, type CjCredentials } from "@/lib/integrations/cjdropshipping";
-import { decryptJson } from "@/lib/crypto";
+import { getFreshCjCredentials } from "@/lib/integrations/cjdropshipping-token";
 import { isPriceStale } from "@/lib/intelligence/decision";
 import {
   comparePriceSnapshot,
@@ -147,11 +147,23 @@ function sleep(ms: number): Promise<void> {
 const MAX_CJ_LOOKUPS_PER_EXECUTION = 20;
 const CJ_LOOKUP_DELAY_MS = 350;
 
-/** `null` si CJ n'est pas connecté pour cette boutique — le connecteur est optionnel, jamais requis pour exécuter "Vérifier le fournisseur". */
+/**
+ * `null` si CJ n'est pas connecté pour cette boutique — le connecteur est
+ * optionnel, jamais requis pour exécuter "Vérifier le fournisseur". Passe
+ * TOUJOURS par `getFreshCjCredentials` (jamais un décryptage direct) pour
+ * garantir un accessToken valide — voir cjdropshipping-token.ts. Un échec de
+ * renouvellement dégrade en "CJ non disponible pour cette exécution" plutôt
+ * que de bloquer la mission (même logique best-effort que `checkCjStock`
+ * ci-dessous pour une variante individuelle).
+ */
 async function getCjCreds(storeId: string): Promise<CjCredentials | null> {
   const integration = await prisma.integration.findUnique({ where: { storeId_provider: { storeId, provider: "CJDROPSHIPPING" } } });
   if (!integration || integration.status !== "CONNECTED" || !integration.encryptedCredentials) return null;
-  return decryptJson<CjCredentials>(integration.encryptedCredentials);
+  try {
+    return await getFreshCjCredentials(integration);
+  } catch {
+    return null;
+  }
 }
 
 /**
