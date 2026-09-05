@@ -156,6 +156,27 @@ describe("POST /api/stock/secure-ruptures", () => {
     expect(executeUnpublish).not.toHaveBeenCalled();
   });
 
+  it("découpe TOUJOURS en sous-lots d'au plus MAX_CJ_LOOKUPS_PER_EXECUTION (20) auprès de CJ, quelle que soit la taille de lot demandée (05/09/2026 — taille de lot choisissable)", async () => {
+    const variants: Variant[] = Array.from({ length: 25 }, (_, i) => ({ id: `v${i}`, sku: `SKU${i}`, productId: `p${i}`, title: `Var ${i}`, inventoryQuantity: 0, supplierStock: null }));
+    const products: Product[] = variants.map((v) => ({ id: v.productId, storeId: "store1", status: "active", title: `P-${v.id}`, variants: [v] }));
+    const checkCjStock = vi.fn().mockImplementation(async (_storeId: string, ids: string[]) => ({
+      detail: `vérifié ${ids.length}`,
+      perVariant: ids.map((id: string) => ({ variantId: id, resolvable: true, supplierConfirmedZero: false, correctedToShopify: false, newQuantity: null, line: "x" })),
+    }));
+    const { POST } = await loadWithMocks({ rupturedVariants: variants, products, checkCjStock });
+    const res = await POST(makeRequest({ storeId: "store1", batchSize: 50 }));
+    expect(res.status).toBe(200);
+    expect(checkCjStock).toHaveBeenCalledTimes(2);
+    expect((checkCjStock.mock.calls[0]![1] as string[]).length).toBe(20);
+    expect((checkCjStock.mock.calls[1]![1] as string[]).length).toBe(5);
+  });
+
+  it("refuse une taille de lot hors de la liste autorisée (20/50/100)", async () => {
+    const { POST } = await loadWithMocks({});
+    const res = await POST(makeRequest({ storeId: "store1", batchSize: 37 }));
+    expect(res.status).toBe(400);
+  });
+
   it("compte les variantes sans SKU comme non vérifiables, sans bloquer le reste du lot", async () => {
     const variants: Variant[] = [
       { id: "v1", sku: null, productId: "p1", title: "Sans SKU", inventoryQuantity: 0, supplierStock: null },

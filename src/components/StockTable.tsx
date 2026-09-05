@@ -17,16 +17,22 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   inconnu: { label: "Vélocité inconnue", cls: "badge-neutral" },
 };
 
-const MAX_BULK = 50;
+// Doit rester ≥ à la plus grande option de src/lib/pagination.ts passée en
+// pageSizeOptions par la page /stock ([50, 100, 150]) ET égal à
+// MAX_BULK_ITEMS dans /api/stock/bulk-update/route.ts — sinon "tout
+// sélectionner sur cette page" pourrait cocher plus que ce que le serveur
+// accepte en un seul lot.
+const MAX_BULK = 150;
 
 /**
  * Tableau /stock + sélection multiple + modification en masse (lot 4,
- * 05/09/2026). Composant client autonome, même principe que
- * PricingBulkTable : le serveur (page.tsx) ne fait que lire et paginer les
- * données, toute l'interaction (cases à cocher, modale de règle, appel API)
- * vit ici. `rows` = la page actuellement affichée (≤ pageSize, donc ≤ 50
- * dans les faits) ; `filteredCount` = le total correspondant aux filtres
- * actuels (pour "Appliquer à tout le filtre").
+ * 05/09/2026 — taille de page choisie parmi 50/100/150 le même jour).
+ * Composant client autonome, même principe que PricingBulkTable : le
+ * serveur (page.tsx) ne fait que lire et paginer les données, toute
+ * l'interaction (cases à cocher, modale de règle, appel API) vit ici. `rows`
+ * = la page actuellement affichée (≤ pageSize choisi, donc ≤ 150 dans les
+ * faits) ; `filteredCount` = le total correspondant aux filtres actuels
+ * (pour "Appliquer à tout le filtre").
  */
 export default function StockTable({
   rows,

@@ -21,15 +21,28 @@ export default function SyncButton({
   async function runSync() {
     setLoading(true);
     setResult(null);
-    const res = await fetch("/api/sync", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ storeId }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setLoading(false);
-    setResult(res.ok ? "Synchronisation terminée." : data.error ?? "Échec de synchronisation.");
-    router.refresh();
+    // CORRECTIF 05/09/2026 — try/catch/finally ajouté : sur un gros
+    // catalogue, une requête peut échouer au niveau réseau (timeout serveur,
+    // connexion coupée) plutôt que de renvoyer une réponse HTTP propre. Sans
+    // ce filet, `fetch` levait une exception non interceptée et le bouton
+    // restait bloqué sur "Synchronisation…" indéfiniment (jamais remis à
+    // `loading: false`) — perçu par l'utilisateur comme le bouton qui
+    // "disparaît"/se fige. Voir /api/sync/route.ts (maxDuration ajouté au
+    // même correctif) pour la cause côté serveur.
+    try {
+      const res = await fetch("/api/sync", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ storeId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setResult(res.ok ? "Synchronisation terminée." : data.error ?? "Échec de synchronisation.");
+    } catch {
+      setResult("Échec de synchronisation (connexion interrompue) — réessayez dans quelques instants.");
+    } finally {
+      setLoading(false);
+      router.refresh();
+    }
   }
 
   const disabled = !shopifyConnected && !judgemeConnected;

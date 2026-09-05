@@ -111,9 +111,9 @@ describe("POST /api/stock/bulk-update", () => {
     expect(res.status).toBe(400);
   });
 
-  it("mode selected : refuse plus de 50 variantes (plafond de sécurité)", async () => {
+  it("mode selected : refuse plus de 150 variantes (plafond de sécurité — aligné sur la plus grande taille de page de /stock)", async () => {
     const { POST } = await loadWithMocks({});
-    const items = Array.from({ length: 51 }, (_, i) => ({ variantId: `v${i}`, expectedCurrentQuantity: 0 }));
+    const items = Array.from({ length: 151 }, (_, i) => ({ variantId: `v${i}`, expectedCurrentQuantity: 0 }));
     const res = await POST(makeRequest({ storeId: "store1", mode: "selected", rule: { kind: "absolute", value: 10 }, items }));
     expect(res.status).toBe(400);
   });

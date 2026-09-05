@@ -20,17 +20,23 @@ type BatchResult = {
   error?: string;
 };
 
+const BATCH_SIZE_OPTIONS = [20, 50, 100] as const;
+
 /**
- * « Sécuriser mes ruptures » (05/09/2026 v3) — version en masse de "Vérifier
- * le fournisseur". Objectif explicite de l'utilisateur : ne jamais rester
- * visiblement en rupture si un réassort est réellement impossible. Un clic
- * traite un lot (voir /api/stock/secure-ruptures) ; "Continuer" relance sur
- * le lot suivant jusqu'à épuisement des ruptures.
+ * « Sécuriser mes ruptures » (05/09/2026 v3, taille de lot choisissable
+ * ajoutée le même jour — "par 20 c'est un peu récurrent") — version en masse
+ * de "Vérifier le fournisseur". Objectif explicite de l'utilisateur : ne
+ * jamais rester visiblement en rupture si un réassort est réellement
+ * impossible. Un clic traite un lot (voir /api/stock/secure-ruptures, qui
+ * découpe lui-même en sous-lots de 20 vis-à-vis de CJ quelle que soit la
+ * taille choisie ici) ; "Continuer" relance sur le lot suivant jusqu'à
+ * épuisement des ruptures.
  */
 export default function SecureRupturesPanel({ storeId, ruptureCount, cjConnected, shopifyConnected }: { storeId: string; ruptureCount: number; cjConnected: boolean; shopifyConnected: boolean }) {
   const router = useRouter();
   const [stage, setStage] = useState<"idle" | "confirming" | "running" | "done">("idle");
   const [offset, setOffset] = useState(0);
+  const [batchSize, setBatchSize] = useState<(typeof BATCH_SIZE_OPTIONS)[number]>(20);
   const [totals, setTotals] = useState({ corrected: 0, unpublished: 0, unavailable: 0 });
   const [lastResult, setLastResult] = useState<BatchResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +47,7 @@ export default function SecureRupturesPanel({ storeId, ruptureCount, cjConnected
     const res = await fetch("/api/stock/secure-ruptures", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ storeId, offset: currentOffset }),
+      body: JSON.stringify({ storeId, offset: currentOffset, batchSize }),
     });
     const data = (await res.json().catch(() => ({}))) as BatchResult;
     if (!res.ok) {
@@ -90,7 +96,7 @@ export default function SecureRupturesPanel({ storeId, ruptureCount, cjConnected
         {stage === "confirming" && (
           <>
             <p className="cell-sub" style={{ marginBottom: 10 }}>
-              Cette action traite vos ruptures de stock ({ruptureCount.toLocaleString("fr-FR")} au total) par lots de 20, en un clic par lot :
+              Cette action traite vos ruptures de stock ({ruptureCount.toLocaleString("fr-FR")} au total) par lots, en un clic par lot :
             </p>
             <ol style={{ margin: "0 0 12px", paddingLeft: 18, fontSize: 13.5, lineHeight: 1.6 }}>
               <li>Vérifie chaque variante en rupture auprès de CJdropshipping et corrige réellement le stock Shopify si le fournisseur en a.</li>
@@ -99,6 +105,16 @@ export default function SecureRupturesPanel({ storeId, ruptureCount, cjConnected
                 fournisseur — pour ne jamais laisser un produit invendable visible sur votre boutique. Réversible en republiant depuis Shopify.
               </li>
             </ol>
+            <label className="field" style={{ margin: "0 0 12px" }}>
+              <span className="cell-sub">Taille du lot (nombre de ruptures traitées par clic)</span>
+              <select className="input" style={{ width: "auto" }} value={batchSize} onChange={(e) => setBatchSize(Number(e.target.value) as (typeof BATCH_SIZE_OPTIONS)[number])}>
+                {BATCH_SIZE_OPTIONS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
             {!cjConnected && (
               <div className="callout callout-warning" style={{ marginBottom: 12 }}>
                 CJdropshipping n&apos;est pas connecté : seule la vérification sera tentée (sans effet), aucune dépublication n&apos;aura lieu — connectez CJdropshipping (Paramètres &gt; Intégrations)

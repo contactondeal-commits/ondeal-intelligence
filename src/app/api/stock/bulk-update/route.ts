@@ -7,16 +7,18 @@ import { analyzeStock, queryStock, type StockInput } from "@/lib/intelligence/st
 import { salesWindowStart, unitsSoldInWindow } from "@/lib/intelligence/salesWindow";
 import { POST as updateSingleStock } from "@/app/api/stock/update/route";
 
-// CORRECTIF 05/09/2026 (lot 4) — modification de stock EN MASSE, demandée
-// depuis le tout premier message de la journée : "sélectionner une page de
-// 50 produits, une série ou une catégorie pour appliquer un changement de
-// stock" (valeur arbitraire, PAS liée aux ruptures — voir secure-ruptures
-// pour ce cas déjà couvert séparément).
+// CORRECTIF 05/09/2026 (lot 4, puis extension "taille de page" le même jour)
+// — modification de stock EN MASSE, demandée depuis le tout premier message
+// de la journée : "sélectionner une page de produits, une série ou une
+// catégorie pour appliquer un changement de stock" (valeur arbitraire, PAS
+// liée aux ruptures — voir secure-ruptures pour ce cas déjà couvert
+// séparément).
 //
 // Deux modes de sélection, une seule règle appliquée à chaque variante :
 //   - "selected" : liste explicite de variantId cochées manuellement dans le
-//     tableau /stock (plafond MAX_BULK_ITEMS, la page affiche 50 lignes —
-//     donc "toute une page" tient toujours en un seul lot).
+//     tableau /stock (plafond MAX_BULK_ITEMS — voir /lib/pagination.ts, la
+//     page /stock permet de choisir 50/100/150 lignes, donc "toute une page"
+//     tient toujours en un seul lot quel que soit le choix).
 //   - "filtered" : "toutes les variantes correspondant aux filtres actuels"
 //     (statut/recherche/CATÉGORIE/tri) — traité par lots de MAX_BULK_ITEMS
 //     avec `nextOffset`, même pipeline `analyzeStock`+`queryStock` QUE la
@@ -33,9 +35,14 @@ import { POST as updateSingleStock } from "@/app/api/stock/update/route";
 // même pattern que /api/actions/bulk réutilisant /api/actions. Séquentiel,
 // volontairement : chaque appel repasse par sa propre transaction
 // d'idempotence, la paralléliser n'apporterait rien ici.
-export const maxDuration = 60;
+//
+// MAX_BULK_ITEMS = 150 pour couvrir la plus grande taille de page proposée
+// sur /stock (50/100/150 — voir StockTable.tsx). maxDuration relevé à 300s
+// (plan Vercel Pro, même plafond que cron/sync) : jusqu'à 150 écritures
+// Shopify séquentielles dans le pire des cas, contre 50 auparavant.
+export const maxDuration = 300;
 
-const MAX_BULK_ITEMS = 50;
+const MAX_BULK_ITEMS = 150;
 
 const ruleSchema = z.union([
   z.object({ kind: z.literal("absolute"), value: z.number().int().min(0).max(10_000_000) }),

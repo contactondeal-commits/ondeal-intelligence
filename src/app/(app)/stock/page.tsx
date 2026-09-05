@@ -134,7 +134,7 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
           sort={{ key: "sort", label: "Tri", value: sort, options: SORT_OPTIONS }}
         />
         <StockTable rows={rows} storeId={store.id} shopifyConnected={shopifyConnected} filteredCount={total} filters={{ status, q: params.q, category, sort }} />
-        <Pagination total={total} page={page} pageSize={pageSize} params={urlParams} label="variantes" />
+        <Pagination total={total} page={page} pageSize={pageSize} params={urlParams} label="variantes" pageSizeOptions={[50, 100, 150]} />
       </div>
     </AppShell>
   );

@@ -33,18 +33,61 @@ import { checkCjStock, executeUnpublish, MAX_CJ_LOOKUPS_PER_EXECUTION, type CjCh
 //     "confirmé indisponible") ; si CJ n'est pas connecté, aucune
 //     dépublication n'a lieu, seulement la vérification/correction de stock.
 //
-// Traité par lots (voir BATCH_SIZE, même plafond que MAX_CJ_LOOKUPS_PER_EXECUTION
-// utilisé pour "Vérifier le fournisseur" — limite de débit CJ réelle, 1
-// requête/seconde documentée) : `nextOffset` dans la réponse permet au client
-// de relancer pour le lot suivant, jusqu'à épuisement des ruptures.
-export const maxDuration = 60;
+// Traité par lots (voir ALLOWED_BATCH_SIZES) : `nextOffset` dans la réponse
+// permet au client de relancer pour le lot suivant, jusqu'à épuisement des
+// ruptures. CORRECTIF 05/09/2026 (même jour) — taille de lot rendue
+// choisissable (20/50/100, demande explicite : "par 20 c'est un peu
+// récurrent") plutôt que fixée à MAX_CJ_LOOKUPS_PER_EXECUTION (20). CJ
+// n'autorisant qu'1 requête/seconde, `checkCjStockInChunks` ci-dessous
+// découpe TOUJOURS en sous-lots d'au plus MAX_CJ_LOOKUPS_PER_EXECUTION
+// variantes (même plafond, même pacing interne que "Vérifier le
+// fournisseur", inchangé) et les enchaîne avec une pause de sécurité entre
+// chaque — jamais un seul gros appel CJ, quelle que soit la taille de lot
+// choisie ici. maxDuration relevé en conséquence (100 variantes × pacing CJ
+// + jusqu'à 100 dépublications Shopify séquentielles dans le pire des cas).
+export const maxDuration = 150;
 
-const BATCH_SIZE = MAX_CJ_LOOKUPS_PER_EXECUTION;
+const ALLOWED_BATCH_SIZES = [20, 50, 100] as const;
+const DEFAULT_BATCH_SIZE: (typeof ALLOWED_BATCH_SIZES)[number] = 20;
+/** Pause entre deux sous-lots CJ, en plus du pacing déjà appliqué ENTRE variantes à l'intérieur de checkCjStock — marge de sécurité supplémentaire à la frontière des sous-lots. */
+const CHUNK_PAUSE_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Vérifie jusqu'à `variantIds.length` variantes auprès de CJ en les
+ * découpant en sous-lots d'au plus MAX_CJ_LOOKUPS_PER_EXECUTION (le plafond
+ * de checkCjStock, partagé avec "Vérifier le fournisseur" — jamais relevé
+ * pour ne pas changer ce comportement déjà établi et testé). `null` dès le
+ * premier sous-lot si CJ n'est pas connecté (les suivants ne le seraient pas
+ * non plus) ; sinon agrège `detail`/`perVariant` de chaque sous-lot.
+ */
+async function checkCjStockInChunks(storeId: string, variantIds: string[]): Promise<{ detail: string; perVariant: CjCheckOutcome[] } | null> {
+  if (variantIds.length === 0) return null;
+  const details: string[] = [];
+  const perVariant: CjCheckOutcome[] = [];
+  let anyConnected = false;
+  for (let i = 0; i < variantIds.length; i += MAX_CJ_LOOKUPS_PER_EXECUTION) {
+    if (i > 0) await sleep(CHUNK_PAUSE_MS);
+    const chunk = variantIds.slice(i, i + MAX_CJ_LOOKUPS_PER_EXECUTION);
+    const res = await checkCjStock(storeId, chunk);
+    if (res) {
+      anyConnected = true;
+      details.push(res.detail);
+      perVariant.push(...res.perVariant);
+    }
+  }
+  if (!anyConnected) return null;
+  return { detail: details.join("\n\n"), perVariant };
+}
 
 const bodySchema = z
   .object({
     storeId: z.string().min(1).max(64),
     offset: z.number().int().min(0).max(1_000_000).optional(),
+    batchSize: z.union([z.literal(20), z.literal(50), z.literal(100)]).optional(),
   })
   .strict();
 
@@ -53,6 +96,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "Paramètres invalides." }, { status: 400 });
   const { storeId } = parsed.data;
   const offset = parsed.data.offset ?? 0;
+  const BATCH_SIZE = parsed.data.batchSize ?? DEFAULT_BATCH_SIZE;
 
   let userId: string;
   try {
@@ -125,7 +169,7 @@ export async function POST(req: NextRequest) {
     meta: { actionId: batchAction.id },
   });
 
-  const cjResult = checkable.length > 0 ? await checkCjStock(storeId, checkable.map((v) => v.id)) : null;
+  const cjResult = checkable.length > 0 ? await checkCjStockInChunks(storeId, checkable.map((v) => v.id)) : null;
   const cjConnected = cjResult !== null;
 
   await prisma.actionItem.update({

@@ -6,7 +6,9 @@ import { useState } from "react";
 import Modal from "@/components/ui/Modal";
 import Button from "@/components/ui/Button";
 
-const MAX_BULK = 50;
+// Doit rester égal à MAX_BULK_ITEMS dans /api/stock/bulk-update/route.ts
+// (et ≥ à la plus grande option de taille de page de /stock).
+const MAX_BULK = 150;
 
 type Rule = { kind: "absolute"; value: number } | { kind: "delta"; value: number };
 type ResultItem = { variantId: string; title: string; newQuantity?: number; reason?: string };
@@ -24,13 +26,15 @@ export type StockRow = { variantId: string; title: string; storeStock: number | 
 
 /**
  * Modification de stock EN MASSE (lot 4, 05/09/2026) — toute première
- * demande de la journée : "sélectionner une page de 50 produits, une série
+ * demande de la journée : "sélectionner une page de produits, une série
  * ou une catégorie pour appliquer un changement de stock". Deux modes :
  *   - sélection manuelle (cases à cocher dans le tableau /stock, ce
- *     composant) — jusqu'à 50 variantes, exactement une page ;
+ *     composant) — jusqu'à MAX_BULK variantes, la page /stock permettant de
+ *     choisir 50/100/150 lignes (voir Pagination.tsx), donc "toute une page"
+ *     tient toujours en un seul lot quel que soit ce choix ;
  *   - "toutes les variantes filtrées" — statut/recherche/catégorie/tri
- *     actuels de la page, traité par lots de 50 avec "Continuer" (mêmes
- *     conventions que SecureRupturesPanel).
+ *     actuels de la page, traité par lots de MAX_BULK avec "Continuer"
+ *     (mêmes conventions que SecureRupturesPanel).
  * Toujours réservé à Shopify (seule plateforme avec écriture stock — voir
  * /api/stock/update) : le message d'erreur du serveur l'explique si besoin.
  */
