@@ -7,6 +7,17 @@ import { PLAN_PRICING, type PaidPlan } from "@/lib/integrations/shopify-billing"
 
 const PLAN_ORDER: PaidPlan[] = ["PRO", "BUSINESS", "AGENCY"];
 
+// Bouton "Via Shopify" masqué temporairement (05/09/2026) : Shopify refuse
+// actuellement /api/billing/subscribe (appSubscriptionCreate) en 502 avec
+// "this application is currently owned by a Shop. It must be migrated to
+// the Shopify partners area before it can create charges with the API" —
+// tant que l'app n'est pas migrée côté Partners, ce chemin de paiement est
+// cassé pour le marchand. Le paiement par carte (Stripe, ci-dessous) reste
+// pleinement fonctionnel et n'est pas concerné. Remettre à true dès que la
+// migration Partners est faite et vérifiée (voir le compte-rendu du
+// 05/09/2026 sur l'incident de facturation Shopify).
+const SHOPIFY_BILLING_ENABLED = false;
+
 /**
  * COMMERCIALISATION — deux chemins de paiement indépendants, jamais
  * mélangés :
@@ -102,9 +113,9 @@ export default function BillingPanel({
         </p>
       )}
 
-      {!shopifyConnected && !stripeConfigured ? (
+      {!(SHOPIFY_BILLING_ENABLED && shopifyConnected) && !stripeConfigured ? (
         <p className="cell-sub">
-          Connectez Shopify (Paramètres &gt; Intégrations) pour changer de plan, ou revenez plus tard pour le paiement par carte.
+          Le changement de plan n&apos;est pas disponible pour le moment — revenez plus tard pour le paiement par carte.
         </p>
       ) : (
         <>
@@ -121,7 +132,7 @@ export default function BillingPanel({
                     <span className="badge badge-suggestion">Plan actuel</span>
                   ) : (
                     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                      {shopifyConnected && (
+                      {SHOPIFY_BILLING_ENABLED && shopifyConnected && (
                         <Button
                           variant="secondary"
                           size="sm"
@@ -151,7 +162,7 @@ export default function BillingPanel({
               );
             })}
           </div>
-          {!stripeConfigured && (
+          {!stripeConfigured && SHOPIFY_BILLING_ENABLED && shopifyConnected && (
             <p className="cell-sub" style={{ marginTop: 8 }}>
               Le paiement par carte bancaire n&apos;est pas encore configuré — seule la facturation via Shopify est disponible pour le moment.
             </p>
