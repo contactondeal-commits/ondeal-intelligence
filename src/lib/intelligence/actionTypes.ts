@@ -13,6 +13,14 @@ export const SENSITIVE_ACTION_TYPES = new Set([
   "update_stock",
   "unpublish_product",
   "publish_product",
+  // CORRECTIF 05/09/2026 v4 — "set_product_status" : action manuelle
+  // unifiée (Archiver / Mettre en brouillon / Republier), voir
+  // /api/products/[id]/status. Distincte de "unpublish_product" (qui reste
+  // réservé au moteur de recommandations automatique, toujours vers DRAFT)
+  // pour ne jamais faire dépendre le choix manuel du marchand (n'importe
+  // lequel des 3 statuts Shopify) de la sémantique plus étroite de ce type
+  // historique.
+  "set_product_status",
 ]);
 
 export function isSensitiveActionType(type: string | null | undefined): boolean {
