@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import MetricCard from "@/components/MetricCard";
 import BackButton from "@/components/BackButton";
+import ProductStatusActions from "@/components/ProductStatusActions";
 import DataTag from "@/components/ui/DataTag";
 import { SEVERITY_META } from "@/components/ui/severity";
 import { notFound } from "next/navigation";
@@ -68,6 +69,15 @@ export default async function ProductDetailPage({
   });
   if (!product || product.storeId !== store.id) notFound();
 
+  // CORRECTIF 05/09/2026 v4 — même requête que /stock pour "shopifyConnected"
+  // (voir ProductStatusActions) : Archiver/Republier n'est proposé que si
+  // Shopify est réellement connecté, jamais un bouton menant à un échec.
+  const shopifyIntegration = await prisma.integration.findUnique({
+    where: { storeId_provider: { storeId: store.id, provider: "SHOPIFY" } },
+    select: { status: true },
+  });
+  const shopifyConnected = shopifyIntegration?.status === "CONNECTED";
+
   const scoreBreakdown = product.scoreSnapshots[0] ? (JSON.parse(product.scoreSnapshots[0].factorsJson) as {
     score: number;
     dataCompleteness: number;
@@ -129,6 +139,14 @@ export default async function ProductDetailPage({
           <BackButton fallbackHref={`/products?store=${store.id}`} label="Retour aux produits" />
           <h1 className="page-title">{product.title}</h1>
           <p className="page-subtitle">{product.productType ?? "Catégorie non renseignée"} · statut Shopify : {product.status}</p>
+          <div style={{ marginTop: 6 }}>
+            <ProductStatusActions
+              storeId={store.id}
+              productId={product.id}
+              currentStatus={product.status as "active" | "draft" | "archived"}
+              shopifyConnected={shopifyConnected}
+            />
+          </div>
         </div>
         {/* LOT 10 (05/09/2026) — Copilot contextuel : entrée directe vers
             l'assistant AVEC ce produit déjà en contexte, pour des questions
