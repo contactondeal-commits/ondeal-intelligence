@@ -580,6 +580,24 @@ function Kpi({ label, value, trend, tag, hint }: { label: string; value: string;
   );
 }
 
+// Formatage de date SANS dépendre de l'ICU du runtime (05/09/2026 — corrige
+// une erreur d'hydratation React réelle #418 observée en production dès que
+// ce graphique affiche de vraies données : `toLocaleDateString("fr-FR")`
+// peut produire une chaîne différente entre le serveur (Node) et le
+// navigateur — versions CLDR différentes selon l'environnement — ce qui est
+// invisible tant qu'aucune vente n'active ce composant, mais casse
+// l'hydratation dès la première fois. Remplacé par un formatage manuel,
+// déterministe, identique serveur/client.
+const MONTH_SHORT_FR = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
+function formatDateShortFr(d: Date): string {
+  return `${d.getDate()} ${MONTH_SHORT_FR[d.getMonth()]}`;
+}
+function formatDateFr(d: Date): string {
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}/${mm}/${d.getFullYear()}`;
+}
+
 /** Ventes journalières RÉELLES (SalesSnapshot) — rendu uniquement quand au moins un jour a une vente. */
 function SalesChart({ points }: { points: Array<{ date: Date; revenue: number }> }) {
   const w = 720;
@@ -601,16 +619,19 @@ function SalesChart({ points }: { points: Array<{ date: Date; revenue: number }>
         ))}
         {points.map((p, i) => (
           <rect key={i} x={pad.l + i * bw + 1} y={y(p.revenue)} width={Math.max(2, bw - 2)} height={h - pad.b - y(p.revenue)} className="chart-bar">
-            <title>
-              {p.date.toLocaleDateString("fr-FR")} : {p.revenue.toFixed(2)} €
-            </title>
+            {/* Un seul enfant texte (gabarit unique) plutôt que plusieurs expressions JSX adjacentes :
+                l'élément <title> en contexte SVG a un traitement d'analyse HTML particulier où le
+                marqueur de limite <!-- --> habituel de React entre plusieurs nœuds texte n'est pas
+                préservé par le navigateur — cause racine réelle de l'erreur d'hydratation #418
+                observée ici, distincte du formatage de date déjà corrigé ci-dessus. */}
+            <title>{`${formatDateFr(p.date)} : ${p.revenue.toFixed(2)} €`}</title>
           </rect>
         ))}
         <text x={pad.l} y={h - 6} className="chart-axis">
-          {points[0]!.date.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+          {formatDateShortFr(points[0]!.date)}
         </text>
         <text x={w - pad.r} y={h - 6} className="chart-axis" textAnchor="end">
-          {points[points.length - 1]!.date.toLocaleDateString("fr-FR", { day: "numeric", month: "short" })}
+          {formatDateShortFr(points[points.length - 1]!.date)}
         </text>
       </svg>
       <figcaption className="cell-sub">Seuls les jours avec au moins une vente ont une barre (agrégat réel produit × jour).</figcaption>
