@@ -20,6 +20,8 @@ export interface StockInput {
   // aucune donnée de vente n'a encore été synchronisée pour ce produit.
   unitsSoldLast30Days: Nullable<number>;
   lastSyncedAt: Nullable<string>;
+  // Passe-plat (Product.productType) — voir StockAnalysis.productType.
+  productType?: Nullable<string>;
 }
 
 /**
@@ -86,7 +88,51 @@ export function analyzeStock(input: StockInput): StockAnalysis {
     status,
     supplierMismatch,
     lastSyncedAt: input.lastSyncedAt,
+    productType: input.productType ?? null,
   };
+}
+
+/** Ordre de criticité (le plus urgent en premier) — partagé par la page /stock et la modification en masse (bulk-update). */
+export const STOCK_STATUS_ORDER: Record<StockStatus, number> = {
+  rupture: 0,
+  rupture_imminente: 1,
+  stock_faible: 2,
+  stock_dormant: 3,
+  surstock: 4,
+  stock_normal: 5,
+  inconnu: 6,
+};
+
+export interface StockQueryParams {
+  /** "all" | "critical" (rupture/imminente/incohérence fournisseur) | une valeur de StockStatus */
+  status: string;
+  q?: string;
+  /** Product.productType exact, ou "all"/absent pour ne pas filtrer. */
+  category?: string;
+  /** "critical" | "stock_asc" | "stock_desc" | "title" */
+  sort: string;
+}
+
+/**
+ * Filtre + trie un ensemble d'analyses stock — SOURCE UNIQUE partagée par la
+ * page /stock (rendu paginé) et /api/stock/bulk-update (mode "filtered" :
+ * appliquer un changement à TOUTES les variantes correspondant aux filtres
+ * actuels, pas seulement la page affichée). Toute divergence entre les deux
+ * romprait la promesse "ce que vous voyez est ce qui sera modifié".
+ */
+export function queryStock(analyses: StockAnalysis[], params: StockQueryParams): StockAnalysis[] {
+  const q = params.q?.trim().toLowerCase();
+  let filtered = analyses;
+  if (params.status === "critical") filtered = filtered.filter((a) => a.status === "rupture" || a.status === "rupture_imminente" || a.supplierMismatch);
+  else if (params.status !== "all") filtered = filtered.filter((a) => a.status === params.status);
+  if (params.category && params.category !== "all") filtered = filtered.filter((a) => a.productType === params.category);
+  if (q) filtered = filtered.filter((a) => a.title.toLowerCase().includes(q) || (a.sku ?? "").toLowerCase().includes(q));
+  return [...filtered].sort((a, b) => {
+    if (params.sort === "stock_asc") return (a.storeStock ?? Infinity) - (b.storeStock ?? Infinity) || a.title.localeCompare(b.title);
+    if (params.sort === "stock_desc") return (b.storeStock ?? -1) - (a.storeStock ?? -1) || a.title.localeCompare(b.title);
+    if (params.sort === "title") return a.title.localeCompare(b.title);
+    return STOCK_STATUS_ORDER[a.status] - STOCK_STATUS_ORDER[b.status] || a.title.localeCompare(b.title);
+  });
 }
 
 export function summarizeStock(analyses: StockAnalysis[]) {

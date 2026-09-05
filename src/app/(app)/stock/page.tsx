@@ -1,14 +1,13 @@
-import Link from "next/link";
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import Pagination from "@/components/ui/Pagination";
 import TableControls from "@/components/ui/TableControls";
 import DataTag from "@/components/ui/DataTag";
-import StockQuantityCell from "@/components/StockQuantityCell";
 import SecureRupturesPanel from "@/components/SecureRupturesPanel";
+import StockTable from "@/components/StockTable";
 import { parsePageParams } from "@/lib/pagination";
-import { analyzeStock, summarizeStock, type StockInput } from "@/lib/intelligence/stock";
+import { analyzeStock, summarizeStock, queryStock, type StockInput } from "@/lib/intelligence/stock";
 import { salesWindowStart, unitsSoldInWindow } from "@/lib/intelligence/salesWindow";
 import type { StockAnalysis } from "@/types";
 
@@ -22,7 +21,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   inconnu: { label: "Vélocité inconnue", cls: "badge-neutral" },
 };
 
-type Params = { store?: string; q?: string; status?: string; sort?: string; page?: string; pageSize?: string };
+type Params = { store?: string; q?: string; status?: string; category?: string; sort?: string; page?: string; pageSize?: string };
 
 const STATUS_OPTIONS = [
   { value: "all", label: "Tous les statuts" },
@@ -35,7 +34,6 @@ const SORT_OPTIONS = [
   { value: "stock_desc", label: "Stock décroissant" },
   { value: "title", label: "Nom du produit" },
 ];
-const STATUS_ORDER: Record<string, number> = { rupture: 0, rupture_imminente: 1, stock_faible: 2, stock_dormant: 3, surstock: 4, stock_normal: 5, inconnu: 6 };
 
 /**
  * STOCK INTELLIGENCE — analyse de toutes les variantes en mémoire à partir
@@ -51,7 +49,7 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
   const sort = SORT_OPTIONS.some((o) => o.value === params.sort) ? (params.sort as string) : "critical";
 
   const [products, variants, salesInWindow, salesHistory, shopifyIntegration, cjIntegration] = await Promise.all([
-    prisma.product.findMany({ where: { storeId: store.id }, select: { id: true, title: true, _count: { select: { variants: true } } } }),
+    prisma.product.findMany({ where: { storeId: store.id }, select: { id: true, title: true, productType: true, _count: { select: { variants: true } } } }),
     prisma.variant.findMany({
       where: { product: { storeId: store.id } },
       select: { id: true, productId: true, title: true, sku: true, inventoryQuantity: true, supplierStock: true, updatedAt: true },
@@ -70,6 +68,13 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
   const unitsByProduct = new Map(salesInWindow.map((s) => [s.productId, s._sum.unitsSold ?? 0]));
   const historyByProduct = new Set(salesHistory.map((s) => s.productId));
 
+  // Filtre "Catégorie" (05/09/2026 — modification de stock en masse) : OnDeal
+  // ne synchronise pas les Collections Shopify aujourd'hui, seul
+  // Product.productType (déjà synchronisé) sert de proxy "catégorie".
+  const categories = [...new Set(products.map((p) => p.productType).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b));
+  const CATEGORY_OPTIONS = [{ value: "all", label: "Toutes les catégories" }, ...categories.map((c) => ({ value: c, label: c }))];
+  const category = CATEGORY_OPTIONS.some((o) => o.value === params.category) ? (params.category as string) : "all";
+
   const analyses: StockAnalysis[] = variants.map((v) => {
     const p = productById.get(v.productId);
     const units = unitsByProduct.has(v.productId) ? [{ unitsSold: unitsByProduct.get(v.productId)! }] : [];
@@ -82,6 +87,7 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
       supplierStock: v.supplierStock,
       unitsSoldLast30Days: unitsSoldInWindow(units, historyByProduct.has(v.productId)),
       lastSyncedAt: v.updatedAt.toISOString(),
+      productType: p?.productType ?? null,
     };
     return analyzeStock(input);
   });
@@ -89,21 +95,11 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
   const summary = summarizeStock(analyses);
   const anyData = analyses.length > 0;
   const criticalCount = analyses.filter((a) => a.status === "rupture" || a.status === "rupture_imminente" || a.supplierMismatch).length;
-  const q = params.q?.trim().toLowerCase();
 
-  let filtered = analyses;
-  if (status === "critical") filtered = filtered.filter((a) => a.status === "rupture" || a.status === "rupture_imminente" || a.supplierMismatch);
-  else if (status !== "all") filtered = filtered.filter((a) => a.status === status);
-  if (q) filtered = filtered.filter((a) => a.title.toLowerCase().includes(q) || (a.sku ?? "").toLowerCase().includes(q));
-  filtered = [...filtered].sort((a, b) => {
-    if (sort === "stock_asc") return (a.storeStock ?? Infinity) - (b.storeStock ?? Infinity) || a.title.localeCompare(b.title);
-    if (sort === "stock_desc") return (b.storeStock ?? -1) - (a.storeStock ?? -1) || a.title.localeCompare(b.title);
-    if (sort === "title") return a.title.localeCompare(b.title);
-    return STATUS_ORDER[a.status]! - STATUS_ORDER[b.status]! || a.title.localeCompare(b.title);
-  });
+  const filtered = queryStock(analyses, { status, q: params.q, category, sort });
   const total = filtered.length;
   const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
-  const urlParams: Record<string, string | undefined> = { store: store.id, q: params.q, status, sort, pageSize: params.pageSize };
+  const urlParams: Record<string, string | undefined> = { store: store.id, q: params.q, status, category: category === "all" ? undefined : category, sort, pageSize: params.pageSize };
 
   return (
     <AppShell store={store} active="/stock">
@@ -131,55 +127,13 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
         <TableControls
           params={urlParams}
           searchPlaceholder="Rechercher un produit, une variante, un SKU"
-          filters={[{ key: "status", label: "Statut", value: status, options: STATUS_OPTIONS }]}
+          filters={[
+            { key: "status", label: "Statut", value: status, options: STATUS_OPTIONS },
+            { key: "category", label: "Catégorie", value: category, options: CATEGORY_OPTIONS },
+          ]}
           sort={{ key: "sort", label: "Tri", value: sort, options: SORT_OPTIONS }}
         />
-        <div className="table-scroll">
-          <table className="table table-compact">
-            <thead>
-              <tr>
-                <th>Produit / variante</th>
-                <th>SKU</th>
-                <th className="num">
-                  Stock <DataTag status="real" compact />
-                </th>
-                <th className="num">Stock fournisseur</th>
-                <th className="num">
-                  Jours de stock <DataTag status="calculated" compact />
-                </th>
-                <th>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="unavailable-note" style={{ padding: 24, textAlign: "center" }}>
-                    Aucune variante ne correspond à ces critères.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r) => (
-                <tr key={r.variantId}>
-                  <td className="cell-title">
-                    <Link href={`/products/${r.productId}?store=${store.id}`} style={{ color: "inherit" }}>
-                      {r.title}
-                    </Link>
-                  </td>
-                  <td className="cell-sub">{r.sku ?? "—"}</td>
-                  <td className="num">
-                    <StockQuantityCell storeId={store.id} variantId={r.variantId} currentQuantity={r.storeStock} shopifyConnected={shopifyConnected} />
-                  </td>
-                  <td className="num">{r.supplierStock ?? <span className="unavailable-note">n/d</span>}</td>
-                  <td className="num">{r.daysOfStock !== null ? Math.round(r.daysOfStock) : <span className="unavailable-note">n/d</span>}</td>
-                  <td>
-                    <span className={`badge ${STATUS_META[r.status]!.cls}`}>{STATUS_META[r.status]!.label}</span>
-                    {r.supplierMismatch && <span className="badge badge-urgent" style={{ marginLeft: 4 }}>Fournisseur dispo</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <StockTable rows={rows} storeId={store.id} shopifyConnected={shopifyConnected} filteredCount={total} filters={{ status, q: params.q, category, sort }} />
         <Pagination total={total} page={page} pageSize={pageSize} params={urlParams} label="variantes" />
       </div>
     </AppShell>

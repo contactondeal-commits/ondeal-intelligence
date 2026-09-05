@@ -26,6 +26,10 @@ export interface StockAnalysis {
   status: StockStatus;
   supplierMismatch: boolean; // storeStock === 0 && supplierStock > 0
   lastSyncedAt: Nullable<string>;
+  // Catégorie Shopify (Product.productType) — simple passe-plat, ne participe
+  // à aucun calcul. Ajouté (05/09/2026) pour permettre le filtre "Catégorie"
+  // et la modification de stock en masse par catégorie (queryStock, stock.ts).
+  productType: Nullable<string>;
 }
 
 /** Statut de fiabilité d'une valeur affichée — jamais implicite. */
