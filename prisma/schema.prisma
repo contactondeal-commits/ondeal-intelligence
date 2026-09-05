@@ -57,10 +57,23 @@ model Organization {
   // Shopify (ACTIVE/PENDING/CANCELLED/EXPIRED/FROZEN/DECLINED) est conservé
   // tel quel — Organization.plan n'est mis à jour QUE quand le webhook
   // app_subscriptions/update confirme un statut ACTIVE.
-  billingProvider              String?   // "shopify" | null
+  billingProvider              String?   // "shopify" | "stripe" | null
   shopifySubscriptionId        String?   // GID AppSubscription Shopify
   shopifySubscriptionStatus    String?   // statut brut renvoyé par Shopify
   shopifySubscriptionUpdatedAt DateTime?
+
+  // FACTURATION STRIPE (lot 11, 05/09/2026) — chemin de paiement
+  // indépendant de Shopify, pour que TOUT marchand ou personne intéressée
+  // puisse s'abonner par carte bancaire, quelle que soit sa plateforme
+  // catalogue (WooCommerce/PrestaShop/aucune) ou même un compte Shopify
+  // connecté (le marchand choisit alors son moyen de paiement). Même
+  // discipline que Shopify ci-dessus : `plan` n'est mis à jour QUE quand le
+  // webhook Stripe confirme un statut actif — jamais anticipé à la création
+  // de la session de paiement.
+  stripeCustomerId             String?   // id client Stripe (cus_...), créé au premier essai de paiement
+  stripeSubscriptionId         String?   // id abonnement Stripe (sub_...)
+  stripeSubscriptionStatus     String?   // statut brut Stripe (active/trialing/past_due/canceled/...)
+  stripeSubscriptionUpdatedAt  DateTime?
 
   memberships Membership[]
   stores      Store[]

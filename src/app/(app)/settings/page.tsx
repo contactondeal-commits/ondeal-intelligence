@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import BillingPanel from "@/components/BillingPanel";
 import { PLAN_FEATURES } from "@/lib/plan-limits";
+import { isStripeConfigured } from "@/lib/integrations/stripe-billing";
 
 const FEATURE_LABEL: Record<string, string> = {
   dashboard: "Command Center",
@@ -38,7 +39,14 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   const [org, members, planLimit, storeCounts, lastSync, integrations] = await Promise.all([
     prisma.organization.findUnique({
       where: { id: store.organizationId },
-      select: { name: true, plan: true, createdAt: true, billingProvider: true, shopifySubscriptionStatus: true },
+      select: {
+        name: true,
+        plan: true,
+        createdAt: true,
+        billingProvider: true,
+        shopifySubscriptionStatus: true,
+        stripeSubscriptionStatus: true,
+      },
     }),
     prisma.membership.findMany({ where: { organizationId: store.organizationId }, include: { user: { select: { name: true, email: true } } }, orderBy: { createdAt: "asc" } }),
     prisma.planLimit.findUnique({ where: { plan: store.plan as "STARTER" | "PRO" | "BUSINESS" | "AGENCY" } }),
@@ -139,8 +147,11 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             storeId={store.id}
             currentPlan={store.plan as "STARTER" | "PRO" | "BUSINESS" | "AGENCY"}
             shopifyConnected={shopify?.status === "CONNECTED"}
-            subscriptionStatus={org?.shopifySubscriptionStatus ?? null}
-            billingReturn={resolvedSearchParams.billing === "return"}
+            shopifySubscriptionStatus={org?.shopifySubscriptionStatus ?? null}
+            stripeConfigured={isStripeConfigured()}
+            billingProvider={org?.billingProvider ?? null}
+            stripeSubscriptionStatus={org?.stripeSubscriptionStatus ?? null}
+            billingReturn={resolvedSearchParams.billing === "return" ? "shopify" : resolvedSearchParams.billing === "stripe_return" ? "stripe" : null}
           />
         </section>
       </div>
