@@ -1,9 +1,16 @@
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
+import { decryptJson } from "@/lib/crypto";
 import AppShell from "@/components/AppShell";
 import IntegrationCard from "@/components/IntegrationCard";
+import GoogleAnalyticsCard from "@/components/GoogleAnalyticsCard";
+import type { GoogleAnalyticsCredentials } from "@/lib/integrations/google-analytics";
 
-export default async function IntegrationsPage({ searchParams }: { searchParams: Promise<{ store?: string; connected?: string }> }) {
+export default async function IntegrationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ store?: string; connected?: string; gaError?: string }>;
+}) {
   const resolvedSearchParams = await searchParams;
   const store = await requireStore(resolvedSearchParams);
   const integrations = await prisma.integration.findMany({ where: { storeId: store.id } });
@@ -13,6 +20,22 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const woocommerce = integrations.find((i) => i.provider === "WOOCOMMERCE");
   const prestashop = integrations.find((i) => i.provider === "PRESTASHOP");
   const cjdropshipping = integrations.find((i) => i.provider === "CJDROPSHIPPING");
+  const googleAnalytics = integrations.find((i) => i.provider === "GOOGLE_ANALYTICS");
+
+  // Déchiffré ICI (composant serveur) uniquement pour afficher la propriété
+  // choisie et savoir si la sélection reste en attente — jamais transmis au
+  // client (la carte ne reçoit que propertyDisplayName, jamais le refreshToken).
+  let gaPropertyDisplayName: string | null = null;
+  let gaAwaitingPropertySelection = false;
+  if (googleAnalytics?.status === "CONNECTED" && googleAnalytics.encryptedCredentials) {
+    try {
+      const creds = decryptJson<GoogleAnalyticsCredentials>(googleAnalytics.encryptedCredentials);
+      gaPropertyDisplayName = creds.propertyDisplayName;
+      gaAwaitingPropertySelection = !creds.propertyId;
+    } catch {
+      gaAwaitingPropertySelection = false;
+    }
+  }
 
   return (
     <AppShell store={store} active="/settings">
@@ -26,6 +49,17 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
         <div className="callout callout-info" style={{ marginBottom: 18 }}>
           Shopify est connecté. La première synchronisation démarre automatiquement — retrouvez son statut dans
           Paramètres.
+        </div>
+      )}
+
+      {resolvedSearchParams.connected === "google_analytics" && (
+        <div className="callout callout-info" style={{ marginBottom: 18 }}>
+          Google Analytics est autorisé — choisissez votre propriété GA4 ci-dessous pour démarrer la synchronisation.
+        </div>
+      )}
+      {resolvedSearchParams.gaError && (
+        <div className="callout callout-error" style={{ marginBottom: 18 }}>
+          Connexion Google Analytics interrompue : {resolvedSearchParams.gaError}
         </div>
       )}
 
@@ -138,6 +172,14 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               indépendant du catalogue : vous pouvez la connecter en plus de Shopify/WooCommerce/PrestaShop.
             </>
           }
+        />
+        <GoogleAnalyticsCard
+          storeId={store.id}
+          status={googleAnalytics?.status ?? "NOT_CONNECTED"}
+          lastError={googleAnalytics?.lastError ?? null}
+          lastSyncedAt={googleAnalytics?.lastSyncedAt?.toISOString() ?? null}
+          propertyDisplayName={gaPropertyDisplayName}
+          awaitingPropertySelection={gaAwaitingPropertySelection}
         />
       </div>
     </AppShell>

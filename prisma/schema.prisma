@@ -155,6 +155,8 @@ model Store {
   costAssumptions  CostAssumption[]
   orders           Order[]
   marginSnapshots  MarginSnapshot[]
+  analyticsSnapshots        AnalyticsSnapshot[]
+  analyticsChannelSnapshots AnalyticsChannelSnapshot[]
 
   @@index([organizationId])
   @@map("stores")
@@ -175,6 +177,10 @@ enum IntegrationProvider {
   // lecture seule du stock réel CJ, jamais compté comme intégration
   // catalogue (voir CATALOG_PROVIDERS, api/integrations/connect/route.ts).
   CJDROPSHIPPING
+  // Trafic/acquisition (05/09/2026) — OAuth Google, lecture seule (Data API
+  // + Admin API), indépendant du catalogue comme CJDROPSHIPPING ci-dessus.
+  // Voir src/lib/integrations/google-analytics.ts.
+  GOOGLE_ANALYTICS
 }
 
 enum IntegrationStatus {
@@ -384,6 +390,51 @@ model MarginSnapshot {
   @@unique([storeId, date])
   @@index([storeId, date])
   @@map("margin_snapshots")
+}
+
+// ---------------------------------------------------------------------------
+// TRAFIC / ACQUISITION — connecteur Google Analytics (GA4), 05/09/2026.
+// Agrégats quotidiens dérivés de la Data API GA4 (runReport), jamais du
+// texte brut ni des identifiants visiteurs individuels : uniquement des
+// compteurs déjà agrégés par Google (aucune PII de visiteur final, comme les
+// autres connecteurs — voir Order/OrderLine ci-dessus pour la même
+// discipline côté e-commerce).
+// ---------------------------------------------------------------------------
+
+model AnalyticsSnapshot {
+  id          String   @id @default(cuid())
+  storeId     String
+  date        DateTime
+  sessions    Int
+  activeUsers Int
+  newUsers    Int
+  conversions Int
+  revenue     Float
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, date])
+  @@index([storeId, date])
+  @@map("analytics_snapshots")
+}
+
+// Même agrégat quotidien, ventilé par canal d'acquisition GA4
+// (`sessionSourceMedium`, ex. "google / organic", "facebook / cpc") —
+// permet de détecter un canal à fort trafic mais sans conversion.
+model AnalyticsChannelSnapshot {
+  id           String   @id @default(cuid())
+  storeId      String
+  date         DateTime
+  sourceMedium String
+  sessions     Int
+  conversions  Int
+  revenue      Float
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, date, sourceMedium])
+  @@index([storeId, date])
+  @@map("analytics_channel_snapshots")
 }
 
 // ---------------------------------------------------------------------------

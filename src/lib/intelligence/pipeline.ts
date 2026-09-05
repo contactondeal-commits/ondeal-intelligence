@@ -7,6 +7,7 @@ import { salesWindowStart, unitsSoldInWindow } from "@/lib/intelligence/salesWin
 import { computeScore, type ScoreInputs } from "@/lib/intelligence/score";
 import { analyzeReviews } from "@/lib/intelligence/reviews";
 import { generateRecommendations, type RecommendationContext } from "@/lib/intelligence/recommendations";
+import { detectTrafficSignals } from "@/lib/intelligence/traffic";
 import type { MarginAnalysis, StockAnalysis } from "@/types";
 
 /**
@@ -140,6 +141,8 @@ export async function recomputeStoreIntelligence(storeId: string): Promise<void>
     totalProductCount: products.length,
   });
 
+  const traffic = await computeTrafficSignals(storeId);
+
   const ctx: RecommendationContext = {
     stock: stockAnalyses,
     margin: marginAnalyses,
@@ -147,6 +150,7 @@ export async function recomputeStoreIntelligence(storeId: string): Promise<void>
     reviewsWithoutAny,
     activeWithoutStock,
     dataIssues: [],
+    traffic,
   };
 
   const generated = generateRecommendations(ctx);
@@ -203,4 +207,45 @@ function avgOf(values: number[]): number {
 }
 function clampScore(v: number): number {
   return Math.max(0, Math.min(100, v));
+}
+
+/**
+ * Trafic/acquisition (Google Analytics, 05/09/2026) — additif, voir
+ * traffic.ts. Requête directement AnalyticsSnapshot/AnalyticsChannelSnapshot
+ * (jamais via une vérification "l'intégration est-elle connectée" : si ces
+ * tables sont vides pour cette boutique, les agrégats sont simplement à 0 et
+ * detectTrafficSignals ne produit rien — mêmes seuils de bruit statistique
+ * que pour toute autre boutique sans données).
+ */
+async function computeTrafficSignals(storeId: string) {
+  const now = new Date();
+  const startLast7 = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const startPrevious7 = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+  const [last7, previous7, channelsLast7] = await Promise.all([
+    prisma.analyticsSnapshot.findMany({ where: { storeId, date: { gte: startLast7 } } }),
+    prisma.analyticsSnapshot.findMany({ where: { storeId, date: { gte: startPrevious7, lt: startLast7 } } }),
+    prisma.analyticsChannelSnapshot.findMany({ where: { storeId, date: { gte: startLast7 } } }),
+  ]);
+
+  const sumWindow = (rows: Array<{ sessions: number; conversions: number; revenue: number }>) =>
+    rows.reduce(
+      (acc, r) => ({ sessions: acc.sessions + r.sessions, conversions: acc.conversions + r.conversions, revenue: acc.revenue + r.revenue }),
+      { sessions: 0, conversions: 0, revenue: 0 },
+    );
+
+  const channelTotals = new Map<string, { sessions: number; conversions: number; revenue: number }>();
+  for (const row of channelsLast7) {
+    const acc = channelTotals.get(row.sourceMedium) ?? { sessions: 0, conversions: 0, revenue: 0 };
+    acc.sessions += row.sessions;
+    acc.conversions += row.conversions;
+    acc.revenue += row.revenue;
+    channelTotals.set(row.sourceMedium, acc);
+  }
+
+  return detectTrafficSignals({
+    last7Days: sumWindow(last7),
+    previous7Days: sumWindow(previous7),
+    channelsLast7Days: Array.from(channelTotals.entries()).map(([sourceMedium, v]) => ({ sourceMedium, ...v })),
+  });
 }

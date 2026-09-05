@@ -13,7 +13,7 @@ export async function canCreateStore(organizationId: string): Promise<{ allowed:
   if (org.stores.length >= limit.maxStores) {
     return {
       allowed: false,
-      reason: `Le plan ${org.plan} est limité à ${limit.maxStores} boutique(s). Passej à un plan supérieur pour en connecter davantage.`,
+      reason: `Le plan ${org.plan} est limité à ${limit.maxStores} boutique(s). Passez à un plan supérieur pour en connecter davantage.`,
     };
   }
   return { allowed: true };

@@ -44,6 +44,32 @@ export default async function MarketingPage({ searchParams }: { searchParams: Pr
     .sort((a, b) => (b.scoreSnapshots[0]?.score ?? 0) - (a.scoreSnapshots[0]?.score ?? 0))
     .slice(0, 6);
 
+  // Trafic & Acquisition (Google Analytics, 05/09/2026) — lecture directe
+  // des agrégats stockés par syncGoogleAnalytics ; page vide et honnête si
+  // le connecteur n'est pas encore configuré (jamais de donnée inventée).
+  const gaIntegration = await prisma.integration.findUnique({
+    where: { storeId_provider: { storeId: store.id, provider: "GOOGLE_ANALYTICS" } },
+  });
+  const gaConnected = gaIntegration?.status === "CONNECTED";
+  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [dailySnapshots, channelSnapshots] = gaConnected
+    ? await Promise.all([
+        prisma.analyticsSnapshot.findMany({ where: { storeId: store.id, date: { gte: since30d } }, orderBy: { date: "asc" } }),
+        prisma.analyticsChannelSnapshot.findMany({ where: { storeId: store.id, date: { gte: since30d } } }),
+      ])
+    : [[], []];
+
+  const gaTotals = dailySnapshots.reduce(
+    (acc, d) => ({ sessions: acc.sessions + d.sessions, conversions: acc.conversions + d.conversions, revenue: acc.revenue + d.revenue }),
+    { sessions: 0, conversions: 0, revenue: 0 },
+  );
+  const channelTotals = new Map<string, { sessions: number; conversions: number; revenue: number }>();
+  for (const c of channelSnapshots) {
+    const cur = channelTotals.get(c.sourceMedium) ?? { sessions: 0, conversions: 0, revenue: 0 };
+    channelTotals.set(c.sourceMedium, { sessions: cur.sessions + c.sessions, conversions: cur.conversions + c.conversions, revenue: cur.revenue + c.revenue });
+  }
+  const topChannels = [...channelTotals.entries()].sort((a, b) => b[1].sessions - a[1].sessions).slice(0, 8);
+
   return (
     <AppShell store={store} active="/marketing">
       <h1 className="page-title">Marketing Intelligence</h1>
@@ -82,6 +108,58 @@ export default async function MarketingPage({ searchParams }: { searchParams: Pr
               </div>
             </div>
           ))
+        )}
+      </div>
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 800, marginBottom: 12 }}>Trafic & Acquisition (Google Analytics)</h2>
+        {!gaConnected ? (
+          <p className="unavailable-note">
+            Connectez Google Analytics depuis{" "}
+            <a href={`/settings/integrations?store=${store.id}`} style={{ color: "inherit", fontWeight: 700 }}>
+              Paramètres &gt; Intégrations
+            </a>{" "}
+            pour voir vos sessions, canaux et conversions ici.
+          </p>
+        ) : dailySnapshots.length === 0 ? (
+          <p className="unavailable-note">Google Analytics est connecté — en attente de la première synchronisation.</p>
+        ) : (
+          <>
+            <div className="grid grid-3" style={{ marginBottom: 16 }}>
+              <div className="card" style={{ padding: 14 }}>
+                <div className="unavailable-note">Sessions (30 j)</div>
+                <div style={{ fontWeight: 800, fontSize: 20 }}>{gaTotals.sessions.toLocaleString("fr-FR")}</div>
+              </div>
+              <div className="card" style={{ padding: 14 }}>
+                <div className="unavailable-note">Conversions (30 j)</div>
+                <div style={{ fontWeight: 800, fontSize: 20 }}>{gaTotals.conversions.toLocaleString("fr-FR")}</div>
+              </div>
+              <div className="card" style={{ padding: 14 }}>
+                <div className="unavailable-note">Revenu GA4 (30 j)</div>
+                <div style={{ fontWeight: 800, fontSize: 20 }}>{gaTotals.revenue.toLocaleString("fr-FR", { style: "currency", currency: "EUR" })}</div>
+              </div>
+            </div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Canal</th>
+                  <th>Sessions</th>
+                  <th>Conversions</th>
+                  <th>Revenu</th>
+                </tr>
+              </thead>
+              <tbody>
+                {topChannels.map(([sourceMedium, t]) => (
+                  <tr key={sourceMedium}>
+                    <td>{sourceMedium}</td>
+                    <td>{t.sessions.toLocaleString("fr-FR")}</td>
+                    <td>{t.conversions.toLocaleString("fr-FR")}</td>
+                    <td>{t.revenue.toLocaleString("fr-FR", { style: "currency", currency: "EUR" })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </div>
 

@@ -45,6 +45,7 @@ describe("GET /api/cron/sync", () => {
     const findManyStore = vi.fn();
     vi.doMock("@/lib/db", () => ({ prisma: { store: { findMany: findManyStore }, syncRun: { findFirst: vi.fn() } } }));
     vi.doMock("@/lib/sync/pipeline", () => ({ syncCatalog: vi.fn(), syncJudgeme: vi.fn() }));
+    vi.doMock("@/lib/sync/googleAnalyticsStore", () => ({ syncGoogleAnalytics: vi.fn() }));
     const { GET } = await import("@/app/api/cron/sync/route");
     const res = await GET(makeRequest());
     expect(res.status).toBe(401);
@@ -63,6 +64,7 @@ describe("GET /api/cron/sync", () => {
       },
     }));
     vi.doMock("@/lib/sync/pipeline", () => ({ syncCatalog, syncJudgeme }));
+    vi.doMock("@/lib/sync/googleAnalyticsStore", () => ({ syncGoogleAnalytics: vi.fn().mockResolvedValue({ status: "not_connected", itemsFetched: 0, itemsStored: 0, errorCount: 0 }) }));
     const { GET } = await import("@/app/api/cron/sync/route");
     const res = await GET(makeRequest({ authorization: "Bearer s" }));
     const body = await res.json();
@@ -85,6 +87,7 @@ describe("GET /api/cron/sync", () => {
       },
     }));
     vi.doMock("@/lib/sync/pipeline", () => ({ syncCatalog, syncJudgeme }));
+    vi.doMock("@/lib/sync/googleAnalyticsStore", () => ({ syncGoogleAnalytics: vi.fn().mockResolvedValue({ status: "not_connected", itemsFetched: 0, itemsStored: 0, errorCount: 0 }) }));
     const { GET } = await import("@/app/api/cron/sync/route");
     const res = await GET(makeRequest({ authorization: "Bearer s" }));
     const body = await res.json();
@@ -115,6 +118,7 @@ describe("GET /api/cron/sync", () => {
       },
     }));
     vi.doMock("@/lib/sync/pipeline", () => ({ syncCatalog, syncJudgeme }));
+    vi.doMock("@/lib/sync/googleAnalyticsStore", () => ({ syncGoogleAnalytics: vi.fn().mockResolvedValue({ status: "not_connected", itemsFetched: 0, itemsStored: 0, errorCount: 0 }) }));
     const { GET } = await import("@/app/api/cron/sync/route");
     const res = await GET(makeRequest({ authorization: "Bearer s" }));
     const body = await res.json();

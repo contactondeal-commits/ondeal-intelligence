@@ -207,6 +207,11 @@ export interface RecommendationContext {
   reviewsWithoutAny: Array<{ productId: string; title: string }>;
   activeWithoutStock: Array<{ productId: string; title: string }>;
   dataIssues: Array<{ productId: string | null; title: string; issue: string }>;
+  // Trafic/acquisition (Google Analytics, 05/09/2026) — déjà calculés par
+  // detectTrafficSignals (voir lib/intelligence/traffic.ts) : simplement
+  // fusionnés ici, jamais recalculés. Vide (pas absent) si aucune donnée
+  // GA4 n'existe pour cette boutique — voir pipeline.ts.
+  traffic: GeneratedRecommendation[];
 }
 
 /**
@@ -415,6 +420,10 @@ export function generateRecommendations(ctx: RecommendationContext): GeneratedRe
       });
     }
   }
+
+  // 🟣 Signaux trafic/acquisition (Google Analytics) — déjà entièrement
+  // calculés, simplement fusionnés (voir commentaire du champ ctx.traffic).
+  recs.push(...ctx.traffic);
 
   return recs;
 }
