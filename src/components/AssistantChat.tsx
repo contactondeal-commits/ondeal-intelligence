@@ -133,6 +133,16 @@ export default function AssistantChat({
         <input className="input" value={input} onChange={(e) => setInput(e.target.value)} placeholder="Posez votre question…" disabled={busy} />
         <button className="btn btn-primary" type="submit" disabled={busy}>Envoyer</button>
       </form>
+      {/* CORRECTIF 05/09/2026 v4 — disclosure : les questions hors des
+          thématiques prédéfinies (voir SUPPORTED_TOPICS, assistant.ts) sont
+          transmises telles quelles à l'IA pour être comprises — jamais pour
+          les questions déjà couvertes par une intention fermée (celles-là
+          n'envoient qu'une intention + des faits déjà calculés, jamais le
+          texte libre). Affiché une seule fois, pas à chaque message, pour
+          rester lisible. */}
+      <p className="cell-sub" style={{ marginTop: 6, fontSize: 11 }}>
+        Les questions hors des thématiques ci-dessus sont transmises à l&rsquo;IA sous forme de texte libre pour être comprises — évitez d&rsquo;y coller des données personnelles de client.
+      </p>
     </div>
   );
 }
