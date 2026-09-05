@@ -8,15 +8,17 @@ const bodySchema = z
     params: z
       .object({
         newPrice: z.number().positive().max(1_000_000).optional(),
+        newQuantity: z.number().int().min(0).max(10_000_000).optional(),
       })
       .strict()
       .optional(),
   })
   .strict();
 import { logAudit } from "@/lib/audit";
-import { buildPriceSnapshot } from "@/lib/intelligence/snapshot";
+import { buildPriceSnapshot, buildStockSnapshot } from "@/lib/intelligence/snapshot";
 import { resolveCostInputs } from "@/lib/intelligence/costs";
 import { buildPricePrediction } from "@/lib/intelligence/prediction";
+import { fetchCurrentStockFields } from "@/lib/intelligence/stockEvidence";
 
 // PHASE 13 — étape de validation humaine explicite, distincte de l'exécution.
 // "Cette action va modifier votre boutique." → Annuler / Confirmer.
@@ -93,6 +95,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               title: String(mergedPayload.title ?? ""),
             }),
           };
+        }
+      }
+    }
+
+    // Même principe que update_price, avec la preuve stock/vélocité au lieu
+    // de prix/coûts (correctif 05/09/2026 — voir execute/route.ts).
+    if (action.type === "update_stock") {
+      const productId = mergedPayload.productId as string | undefined;
+      const variantId = mergedPayload.variantId as string | undefined;
+      const newQuantity = Number(mergedPayload.newQuantity);
+      if (productId && variantId && Number.isFinite(newQuantity) && newQuantity >= 0 && Number.isInteger(newQuantity)) {
+        const variant = await prisma.variant.findUnique({ where: { id: variantId }, include: { product: { select: { storeId: true } } } });
+        if (variant && (variant.product.storeId !== action.storeId || variant.productId !== productId)) {
+          return NextResponse.json({ error: "Variante hors périmètre de cette boutique." }, { status: 403 });
+        }
+        if (variant) {
+          const currentFields = await fetchCurrentStockFields(productId, variantId);
+          if (currentFields) {
+            mergedPayload = {
+              ...mergedPayload,
+              simulationSnapshot: buildStockSnapshot({ productId, variantId, candidateAddedUnits: null, fields: currentFields }),
+            };
+          }
         }
       }
     }

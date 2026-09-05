@@ -1,9 +1,11 @@
+import Link from "next/link";
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import Pagination from "@/components/ui/Pagination";
 import TableControls from "@/components/ui/TableControls";
 import DataTag from "@/components/ui/DataTag";
+import StockQuantityCell from "@/components/StockQuantityCell";
 import { parsePageParams } from "@/lib/pagination";
 import { analyzeStock, summarizeStock, type StockInput } from "@/lib/intelligence/stock";
 import { salesWindowStart, unitsSoldInWindow } from "@/lib/intelligence/salesWindow";
@@ -47,7 +49,7 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
   const status = STATUS_OPTIONS.some((o) => o.value === params.status) ? (params.status as string) : "all";
   const sort = SORT_OPTIONS.some((o) => o.value === params.sort) ? (params.sort as string) : "critical";
 
-  const [products, variants, salesInWindow, salesHistory] = await Promise.all([
+  const [products, variants, salesInWindow, salesHistory, shopifyIntegration] = await Promise.all([
     prisma.product.findMany({ where: { storeId: store.id }, select: { id: true, title: true, _count: { select: { variants: true } } } }),
     prisma.variant.findMany({
       where: { product: { storeId: store.id } },
@@ -55,7 +57,12 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
     }),
     prisma.salesSnapshot.groupBy({ by: ["productId"], where: { product: { storeId: store.id }, date: { gte: salesWindowStart() } }, _sum: { unitsSold: true } }),
     prisma.salesSnapshot.groupBy({ by: ["productId"], where: { product: { storeId: store.id } }, _count: true }),
+    prisma.integration.findUnique({ where: { storeId_provider: { storeId: store.id, provider: "SHOPIFY" } }, select: { status: true } }),
   ]);
+  // Modification du stock réservée à Shopify (seule plateforme avec une
+  // mutation d'écriture implémentée — voir actionKind.ts) : le contrôle
+  // reste visible mais désactivé pour WooCommerce/PrestaShop, avec explication.
+  const shopifyConnected = shopifyIntegration?.status === "CONNECTED";
   const productById = new Map(products.map((p) => [p.id, p]));
   const unitsByProduct = new Map(salesInWindow.map((s) => [s.productId, s._sum.unitsSold ?? 0]));
   const historyByProduct = new Set(salesHistory.map((s) => s.productId));
@@ -148,9 +155,15 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
               )}
               {rows.map((r) => (
                 <tr key={r.variantId}>
-                  <td className="cell-title">{r.title}</td>
+                  <td className="cell-title">
+                    <Link href={`/products/${r.productId}?store=${store.id}`} style={{ color: "inherit" }}>
+                      {r.title}
+                    </Link>
+                  </td>
                   <td className="cell-sub">{r.sku ?? "—"}</td>
-                  <td className="num">{r.storeStock ?? <span className="unavailable-note">n/d</span>}</td>
+                  <td className="num">
+                    <StockQuantityCell storeId={store.id} variantId={r.variantId} currentQuantity={r.storeStock} shopifyConnected={shopifyConnected} />
+                  </td>
                   <td className="num">{r.supplierStock ?? <span className="unavailable-note">n/d</span>}</td>
                   <td className="num">{r.daysOfStock !== null ? Math.round(r.daysOfStock) : <span className="unavailable-note">n/d</span>}</td>
                   <td>

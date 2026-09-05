@@ -4,14 +4,18 @@ import type { PriceOutcomeMeasurement } from "@/lib/intelligence/prediction";
  * AUTOMATED ACTION vs MANUAL MISSION — distinction demandée explicitement
  * pour ne jamais afficher une fausse exécution.
  *
- * Seuls deux types d'action correspondent aujourd'hui à une mutation Shopify
- * réelle (`updateVariantPrice`, `updateProductStatus` dans
- * `src/lib/integrations/shopify.ts`) : `update_price` et `unpublish_product`.
- * Tous les autres types générés par `recommendations.ts`
- * (`review_supplier`, `request_reviews`, `promote_product`,
- * `edit_product_data`) n'ont aucune mutation associée — ce sont des missions
- * qu'OnDeal prépare et explique, mais que l'utilisateur doit réaliser
- * lui-même (contacter un fournisseur, demander des avis, etc.).
+ * Types d'action correspondant aujourd'hui à une mutation Shopify réelle
+ * (`updateVariantPrice`, `updateProductStatus`, `updateVariantStock` dans
+ * `src/lib/integrations/shopify.ts`) : `update_price`, `unpublish_product`,
+ * `update_stock` (correctif 05/09/2026 — le type était déjà prévu dans le
+ * schéma Prisma et `SENSITIVE_ACTION_TYPES`, mais aucune mutation n'existait
+ * encore : la fiche produit affichait un stock "en lecture seule" sans
+ * qu'aucun marchand ne puisse le corriger depuis OnDeal). Tous les autres
+ * types générés par `recommendations.ts` (`review_supplier`,
+ * `request_reviews`, `promote_product`, `edit_product_data`) n'ont aucune
+ * mutation associée — ce sont des missions qu'OnDeal prépare et explique,
+ * mais que l'utilisateur doit réaliser lui-même (contacter un fournisseur,
+ * demander des avis, etc.).
  *
  * Source unique utilisée à la fois par la route d'exécution (pour taguer le
  * résultat) et par l'UI (pour ne jamais présenter une simple confirmation
@@ -19,7 +23,7 @@ import type { PriceOutcomeMeasurement } from "@/lib/intelligence/prediction";
  */
 export type ActionKind = "automated_mutation" | "manual_mission";
 
-export const AUTOMATED_ACTION_TYPES = new Set(["update_price", "unpublish_product"]);
+export const AUTOMATED_ACTION_TYPES = new Set(["update_price", "unpublish_product", "update_stock"]);
 
 export function actionKindFor(type: string | null | undefined): ActionKind {
   return type && AUTOMATED_ACTION_TYPES.has(type) ? "automated_mutation" : "manual_mission";
@@ -58,6 +62,11 @@ export function criticalTargetKey(type: string | null | undefined, payload: Reco
     // Le statut de publication vit sur le produit.
     const productId = typeof payload.productId === "string" ? payload.productId : fallbackProductId;
     return productId ? `unpublish_product:product:${productId}` : null;
+  }
+  if (type === "update_stock") {
+    // Le stock vit sur la variante — même logique que update_price.
+    const variantId = typeof payload.variantId === "string" ? payload.variantId : null;
+    return variantId ? `update_stock:variant:${variantId}` : null;
   }
   if (type === "review_supplier") {
     // La preuve (stock/vélocité) protégée par le snapshot stock vit sur la

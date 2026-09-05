@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireStoreAccess, requireRole, WRITE_ROLES, AuthError } from "@/lib/auth";
 import { logAudit } from "@/lib/audit";
-import { updateVariantPrice, updateProductStatus, type ShopifyCredentials } from "@/lib/integrations/shopify";
+import { updateVariantPrice, updateProductStatus, updateVariantStock, type ShopifyCredentials } from "@/lib/integrations/shopify";
 import { getFreshShopifyCredentials } from "@/lib/integrations/shopify-token";
 import { queryCjVariantStock, type CjCredentials } from "@/lib/integrations/cjdropshipping";
 import { getFreshCjCredentials } from "@/lib/integrations/cjdropshipping-token";
@@ -78,6 +78,9 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         break;
       case "unpublish_product":
         result = await executeUnpublish(action.storeId, payload);
+        break;
+      case "update_stock":
+        result = await executeUpdateStock(action.storeId, payload);
         break;
       case "review_supplier":
         result = await executeReviewSupplier(action.storeId, payload);
@@ -321,6 +324,65 @@ async function executeUpdatePrice(storeId: string, payload: Record<string, unkno
     applied: newPrice,
     verified: Number(res.price),
     measurement,
+  };
+}
+
+/**
+ * CORRECTIF 05/09/2026 — le type d'action `update_stock` était déjà prévu
+ * dans le schéma (`ActionItem.type`) et dans `SENSITIVE_ACTION_TYPES`, mais
+ * aucune mutation Shopify n'existait : un marchand ne pouvait corriger son
+ * stock nulle part depuis OnDeal. Même architecture que `executeUpdatePrice`
+ * (isolation multi-boutiques, snapshot de simulation vérifié juste avant la
+ * mutation, vérification post-mutation en relisant la réponse Shopify) —
+ * seule la nature de la preuve change (stock/vélocité au lieu de
+ * prix/coûts), en réutilisant les mêmes primitives que `review_supplier`
+ * (`fetchCurrentStockFields`, `compareStockSnapshot`).
+ */
+export async function executeUpdateStock(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
+  const productId = payload.productId as string;
+  const variantId = payload.variantId as string;
+  const newQuantity = Number(payload.newQuantity);
+  if (!productId || !variantId) throw new ExecutionError("Produit/variante manquant dans l'action.");
+  if (!Number.isFinite(newQuantity) || newQuantity < 0 || !Number.isInteger(newQuantity)) {
+    throw new ExecutionError("Aucune nouvelle quantité de stock valide fournie — saisissez un entier positif ou nul avant de confirmer cette action.");
+  }
+
+  // Isolation multi-boutiques (même défense en profondeur que executeUpdatePrice).
+  const [product, variant] = await Promise.all([
+    prisma.product.findFirst({ where: { id: productId, storeId } }),
+    prisma.variant.findFirst({ where: { id: variantId, productId, product: { storeId } } }),
+  ]);
+  if (!product || !variant) throw new ExecutionError("Produit/variante introuvable en base — il a peut-être été supprimé depuis la simulation.");
+
+  const rawSnapshot = payload.simulationSnapshot;
+  if (isStockSnapshot(rawSnapshot)) {
+    const current = await fetchCurrentStockFields(productId, variantId);
+    if (current) {
+      const comparison = compareStockSnapshot(rawSnapshot, current);
+      if (comparison.stale) {
+        throw new StaleSimulationError(describeStockSnapshotChange(comparison), comparison.changedFields);
+      }
+    }
+  }
+
+  const currentStock = variant.inventoryQuantity;
+  const creds = await getShopifyCreds(storeId);
+  const res = await updateVariantStock(creds, variant.shopifyVariantId, newQuantity);
+  if (!res.ok) throw new ExecutionError(res.error);
+
+  // VÉRIFICATION : on relit la quantité retournée par Shopify (pas
+  // seulement "pas d'erreur") et on met à jour notre copie locale pour
+  // rester cohérent jusqu'à la prochaine synchronisation complète.
+  await prisma.variant.update({ where: { id: variantId }, data: { inventoryQuantity: res.quantity } });
+
+  return {
+    ok: true,
+    kind: "automated_mutation",
+    detail: `Stock mis à jour sur Shopify : ${res.quantity} unité(s).`,
+    verification: `Confirmé par la réponse Shopify (nouveau stock : ${res.quantity} unité(s)).`,
+    before: currentStock,
+    applied: newQuantity,
+    verified: res.quantity,
   };
 }
 

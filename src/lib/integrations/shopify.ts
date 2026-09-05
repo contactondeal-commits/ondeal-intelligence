@@ -375,6 +375,73 @@ export async function updateProductStatus(
   return { ok: true, status: data.productUpdate.product.status };
 }
 
+const VARIANT_INVENTORY_QUERY = `
+  query VariantInventory($id: ID!) {
+    productVariant(id: $id) {
+      inventoryItem {
+        id
+        inventoryLevels(first: 1) {
+          nodes { location { id } }
+        }
+      }
+    }
+  }
+`;
+
+const SET_STOCK_MUTATION = `
+  mutation SetStock($input: InventorySetQuantitiesInput!) {
+    inventorySetQuantities(input: $input) {
+      inventoryAdjustmentGroup { changes { name delta quantityAfterChange } }
+      userErrors { field message }
+    }
+  }
+`;
+
+/**
+ * Écrit une quantité de stock ABSOLUE (pas un delta) sur Shopify, pour la
+ * variante et l'emplacement (location) où son inventaire est déjà suivi.
+ * Deux appels : (1) résout inventoryItem + location EN DIRECT à chaque fois
+ * (jamais mis en cache côté OnDeal — une variante sans niveau d'inventaire
+ * connu, ex. suivi désactivé, échoue explicitement plutôt que de deviner un
+ * emplacement) ; (2) `inventorySetQuantities` avec `ignoreCompareQuantity:
+ * true` — la fraîcheur de la donnée est déjà vérifiée en amont via le
+ * snapshot de simulation (voir executeUpdateStock), pas ici.
+ */
+export async function updateVariantStock(
+  creds: ShopifyCredentials,
+  variantGid: string,
+  newQuantity: number,
+): Promise<{ ok: true; quantity: number } | { ok: false; error: string }> {
+  const lookup = await graphqlRequest<{
+    productVariant: { inventoryItem: { id: string; inventoryLevels: { nodes: Array<{ location: { id: string } }> } } | null } | null;
+  }>(creds, VARIANT_INVENTORY_QUERY, { id: variantGid });
+
+  const inventoryItem = lookup.productVariant?.inventoryItem;
+  const locationId = inventoryItem?.inventoryLevels.nodes[0]?.location.id;
+  if (!inventoryItem || !locationId) {
+    return { ok: false, error: "Aucun emplacement d'inventaire Shopify trouvé pour cette variante — le suivi de stock est peut-être désactivé." };
+  }
+
+  const data = await graphqlRequest<{
+    inventorySetQuantities: {
+      inventoryAdjustmentGroup: { changes: Array<{ quantityAfterChange: number }> } | null;
+      userErrors: Array<{ message: string }>;
+    };
+  }>(creds, SET_STOCK_MUTATION, {
+    input: {
+      name: "available",
+      reason: "correction",
+      ignoreCompareQuantity: true,
+      quantities: [{ inventoryItemId: inventoryItem.id, locationId, quantity: newQuantity }],
+    },
+  });
+
+  const errors = data.inventorySetQuantities.userErrors;
+  if (errors.length > 0) return { ok: false, error: errors.map((e) => e.message).join("; ") };
+  const change = data.inventorySetQuantities.inventoryAdjustmentGroup?.changes[0];
+  return { ok: true, quantity: change ? change.quantityAfterChange : newQuantity };
+}
+
 /**
  * Récupère les commandes des `days` derniers jours avec pagination complète
  * des commandes ET de leurs lignes (l'ancienne limite `lineItems(first: 50)`

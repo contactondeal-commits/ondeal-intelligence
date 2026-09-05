@@ -2,9 +2,12 @@ import { describe, it, expect } from "vitest";
 import { actionKindFor, criticalTargetKey } from "@/lib/intelligence/actionKind";
 
 describe("actionKindFor — AUTOMATED ACTION vs MANUAL MISSION", () => {
-  it("classe update_price et unpublish_product comme automated_mutation (mutation Shopify réelle disponible)", () => {
+  it("classe update_price, unpublish_product et update_stock comme automated_mutation (mutation Shopify réelle disponible)", () => {
     expect(actionKindFor("update_price")).toBe("automated_mutation");
     expect(actionKindFor("unpublish_product")).toBe("automated_mutation");
+    // update_stock : correctif 05/09/2026 — le type était déjà prévu dans le
+    // schéma/SENSITIVE_ACTION_TYPES mais aucune mutation n'existait encore.
+    expect(actionKindFor("update_stock")).toBe("automated_mutation");
   });
 
   it("classe les types sans mutation réelle comme manual_mission (jamais présenté comme une vraie exécution)", () => {
@@ -48,6 +51,19 @@ describe("criticalTargetKey — conflit entre deux ActionItems ciblant la même 
     const keyA = criticalTargetKey("unpublish_product", { productId: "p1" }, null);
     const keyB = criticalTargetKey("unpublish_product", {}, "p1"); // productId via le fallback (Recommendation.productId)
     expect(keyA).toBe(keyB);
+  });
+
+  it("update_stock conflicte au niveau de la variante, comme update_price (le stock vit sur la variante)", () => {
+    const keyA = criticalTargetKey("update_stock", { variantId: "v1" }, null);
+    const keyB = criticalTargetKey("update_stock", { variantId: "v1" }, null);
+    expect(keyA).not.toBeNull();
+    expect(keyA).toBe(keyB);
+    const keyOtherVariant = criticalTargetKey("update_stock", { variantId: "v2" }, null);
+    expect(keyA).not.toBe(keyOtherVariant);
+    // Ne doit jamais se confondre avec update_price sur la même variante —
+    // deux données mutables distinctes (stock vs prix), jamais un conflit.
+    const priceKey = criticalTargetKey("update_price", { variantId: "v1" }, null);
+    expect(keyA).not.toBe(priceKey);
   });
 
   it("les types sans donnée mutable partagée (promote_product, request_reviews, edit_product_data) ne produisent jamais de clé — jamais de faux conflit", () => {
