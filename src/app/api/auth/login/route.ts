@@ -19,8 +19,8 @@ export async function POST(req: NextRequest) {
 
   // Anti-force brute : 10 tentatives / 15 min par IP et par email.
   const ip = clientIp(req);
-  const byIp = rateLimit(`login:ip:${ip}`, { max: 30, windowMs: 15 * 60 * 1000 });
-  const byEmail = rateLimit(`login:email:${parsed.data.email.toLowerCase()}`, { max: 10, windowMs: 15 * 60 * 1000 });
+  const byIp = await rateLimit(`login:ip:${ip}`, { max: 30, windowMs: 15 * 60 * 1000 });
+  const byEmail = await rateLimit(`login:email:${parsed.data.email.toLowerCase()}`, { max: 10, windowMs: 15 * 60 * 1000 });
   if (!byIp.ok || !byEmail.ok) {
     const retry = Math.max(byIp.retryAfterSeconds, byEmail.retryAfterSeconds);
     return NextResponse.json({ error: "Trop de tentatives. Réessayez dans quelques minutes." }, { status: 429, headers: { "Retry-After": String(retry) } });

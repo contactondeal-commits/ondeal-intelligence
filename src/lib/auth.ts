@@ -1,10 +1,17 @@
 import { cookies } from "next/headers";
+import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 import type { Role } from "@prisma/client";
 
 const SESSION_COOKIE = "ondeal_session";
+// Jeton anti-CSRF (double soumission, audit conformité 05/09/2026) — voir
+// src/middleware.ts pour la vérification et src/app/layout.tsx pour
+// l'attache automatique côté client. Nom partagé (dupliqué en dur dans le
+// middleware, comme SESSION_COOKIE déjà : le middleware tourne en edge
+// runtime et ne peut pas importer ce fichier, qui dépend de Prisma).
+export const CSRF_COOKIE = "ondeal_csrf";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 jours
 
 function getSecret(): Uint8Array {
@@ -58,11 +65,26 @@ export async function setSessionCookie(token: string, opts?: { sameSite?: "lax" 
     path: "/",
     maxAge: SESSION_TTL_SECONDS,
   });
+  // Jeton anti-CSRF (audit conformité 05/09/2026) — émis à CHAQUE nouvelle
+  // session, y compris SameSite=None (app embarquée) où le cookie de
+  // session est envoyé automatiquement même depuis un site tiers : ce
+  // second cookie neutralise ce risque, car un attaquant cross-site ne
+  // peut pas le LIRE (politique same-origin) pour le rejouer dans l'en-tête
+  // X-CSRF-Token exigé par le middleware. Volontairement PAS httpOnly : le
+  // script du layout racine doit pouvoir le lire pour l'attacher lui-même.
+  store.set(CSRF_COOKIE, crypto.randomBytes(32).toString("hex"), {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === "production" || sameSite === "none",
+    sameSite,
+    path: "/",
+    maxAge: SESSION_TTL_SECONDS,
+  });
 }
 
 export async function clearSessionCookie(): Promise<void> {
   const store = await cookies();
   store.delete(SESSION_COOKIE);
+  store.delete(CSRF_COOKIE);
 }
 
 export async function getSession(): Promise<SessionPayload | null> {

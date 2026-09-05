@@ -20,7 +20,7 @@ const schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const limited = rateLimit(`signup:${clientIp(req)}`, { max: 5, windowMs: 15 * 60 * 1000 });
+  const limited = await rateLimit(`signup:${clientIp(req)}`, { max: 5, windowMs: 15 * 60 * 1000 });
   if (!limited.ok) return NextResponse.json({ error: "Trop de tentatives. Réessayez dans quelques minutes." }, { status: 429, headers: { "Retry-After": String(limited.retryAfterSeconds) } });
 
   const body = await req.json().catch(() => null);

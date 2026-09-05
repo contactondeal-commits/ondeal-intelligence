@@ -4,6 +4,7 @@ import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import BillingPanel from "@/components/BillingPanel";
+import AccountDataActions from "@/components/AccountDataActions";
 import { PLAN_FEATURES } from "@/lib/plan-limits";
 import { isStripeConfigured } from "@/lib/integrations/stripe-billing";
 
@@ -293,16 +294,21 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           </Link>
         </div>
         <p className="cell-sub" style={{ marginTop: 12 }}>
-          Pour exercer votre droit d&apos;accès, de rectification, d&apos;effacement ou de portabilité sur vos données
-          de compte, écrivez-nous — indiquez votre organisation ({store.organizationName}) pour accélérer le
-          traitement de votre demande.
+          Exercez directement votre droit d&apos;accès, de portabilité et d&apos;effacement (RGPD, art. 15/17/20) sur
+          les données de votre compte :
+        </p>
+        <AccountDataActions />
+        <p className="cell-sub" style={{ marginTop: 14 }}>
+          Pour toute autre demande (rectification, export au-delà des plafonds indiqués, question sur un
+          sous-traitant), écrivez-nous — indiquez votre organisation ({store.organizationName}) pour accélérer le
+          traitement.
         </p>
         <a
           href={`mailto:contact@ondeal.fr?subject=${encodeURIComponent(`Demande RGPD — ${store.organizationName}`)}`}
           className="btn btn-secondary"
           style={{ alignSelf: "flex-start" }}
         >
-          Demander l&apos;export ou la suppression de mes données
+          Nous écrire
         </a>
       </section>
     </AppShell>

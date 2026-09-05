@@ -26,16 +26,56 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
   return (
     <html lang="fr" className={inter.variable}>
-      {hasRealShopifyKey && (
-        <head>
-          <meta name="shopify-api-key" content={shopifyApiKey} />
-          {/* Chargement synchrone intentionnel — exigé par Shopify pour App
-              Bridge (doit être disponible avant tout autre script de la
-              page). async/defer casserait la détection embarquée. */}
-          {/* eslint-disable-next-line @next/next/no-sync-scripts */}
-          <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-        </head>
-      )}
+      <head>
+        {hasRealShopifyKey && (
+          <>
+            <meta name="shopify-api-key" content={shopifyApiKey} />
+            {/* Chargement synchrone intentionnel — exigé par Shopify pour App
+                Bridge (doit être disponible avant tout autre script de la
+                page). async/defer casserait la détection embarquée. */}
+            {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+            <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+          </>
+        )}
+        {/* Anti-CSRF (audit conformité 05/09/2026) — attache automatiquement
+            le jeton double-soumission (cookie ondeal_csrf, non-httpOnly,
+            voir lib/auth.ts) en en-tête X-CSRF-Token sur toute requête
+            mutative envoyée vers CE MÊME site, sans modifier un seul des
+            appels fetch existants de l'application (voir middleware.ts
+            pour la vérification serveur). N'affecte jamais une requête vers
+            un autre domaine — l'origine est vérifiée explicitement. Chargé
+            en synchrone volontairement : doit patcher window.fetch avant
+            tout autre script de la page. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){
+  function readCookie(name){
+    var m = document.cookie.match('(?:^|; )' + name + '=([^;]*)');
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  var originalFetch = window.fetch;
+  window.fetch = function(input, init){
+    init = init || {};
+    var method = String(init.method || (input && input.method) || 'GET').toUpperCase();
+    if (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') {
+      var url = typeof input === 'string' ? input : (input && input.url) || '';
+      var isRelative = url.indexOf('http://') !== 0 && url.indexOf('https://') !== 0;
+      var sameOrigin = isRelative || url.indexOf(window.location.origin) === 0;
+      if (sameOrigin) {
+        var token = readCookie('ondeal_csrf');
+        if (token) {
+          var headers = new Headers(init.headers || (typeof input !== 'string' && input && input.headers) || {});
+          headers.set('X-CSRF-Token', token);
+          init = Object.assign({}, init, { headers: headers });
+        }
+      }
+    }
+    return originalFetch.call(this, input, init);
+  };
+})();`,
+          }}
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

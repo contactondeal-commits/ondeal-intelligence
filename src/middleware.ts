@@ -15,6 +15,44 @@ import { jwtVerify } from "jose";
 const SESSION_COOKIE = "ondeal_session";
 const MYSHOPIFY_DOMAIN = /^[a-z0-9][a-z0-9-]{0,62}\.myshopify\.com$/i;
 
+// ============================================================================
+// ANTI-CSRF (audit conformité 05/09/2026) — motif "double soumission".
+// Contexte : les sessions ouvertes depuis l'app embarquée Shopify utilisent
+// un cookie SameSite=None (voir shopify-token-exchange/route.ts et
+// auth.ts::setSessionCookie), nécessaire pour fonctionner dans l'iframe
+// admin — mais SameSite=None fait que ce cookie est envoyé par le
+// navigateur MÊME depuis un site tiers malveillant, ce qui rendrait les
+// routes mutatives vulnérables au CSRF si elles ne se fiaient qu'au cookie
+// de session. Le cookie CSRF_COOKIE (non-httpOnly, voir auth.ts) est lu et
+// rejoué en en-tête X-CSRF-Token par le script du layout racine — un
+// attaquant cross-site ne peut PAS lire ce cookie (politique same-origin)
+// pour construire cet en-tête, même s'il peut faire envoyer le cookie de
+// session lui-même. Dupliqué en dur ici (jamais importé de auth.ts, qui
+// dépend de Prisma — incompatible avec le runtime edge du middleware).
+// ============================================================================
+const CSRF_COOKIE = "ondeal_csrf";
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+// Routes API exemptées : soit elles n'ont pas encore de session (login,
+// signup — la protection y viendrait d'ailleurs, ex. limitation de débit),
+// soit elles s'authentifient déjà autrement qu'un cookie de session
+// (webhooks : HMAC ; OAuth Shopify : état signé + HMAC ; session-token-exchange :
+// jeton App Bridge en en-tête Authorization ; cron : déclenché par Vercel,
+// jamais par un navigateur).
+const CSRF_EXEMPT_PREFIXES = [
+  "/api/auth/login",
+  "/api/auth/signup",
+  "/api/auth/logout",
+  "/api/webhooks/",
+  "/api/shopify/callback",
+  "/api/shopify/install",
+  "/api/shopify/session-token-exchange",
+  "/api/cron/",
+];
+
+function isCsrfExempt(pathname: string): boolean {
+  return CSRF_EXEMPT_PREFIXES.some((p) => pathname === p || pathname.startsWith(p));
+}
+
 function buildCsp(frameAncestors: string): string {
   return [
     "default-src 'self'",
@@ -47,6 +85,22 @@ async function readEmbeddedShopFromSession(req: NextRequest): Promise<string | n
 }
 
 export async function middleware(req: NextRequest) {
+  // Vérification anti-CSRF — avant toute autre logique, pour toute requête
+  // mutative vers une route API non exemptée (voir bloc de constantes
+  // ci-dessus). Rejoue le motif double-soumission : le cookie et l'en-tête
+  // doivent correspondre, tous deux présents.
+  const { pathname } = req.nextUrl;
+  if (MUTATING_METHODS.has(req.method) && pathname.startsWith("/api/") && !isCsrfExempt(pathname)) {
+    const cookieToken = req.cookies.get(CSRF_COOKIE)?.value;
+    const headerToken = req.headers.get("x-csrf-token");
+    if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+      return NextResponse.json(
+        { error: "Jeton de sécurité manquant ou invalide (CSRF). Rechargez la page et réessayez." },
+        { status: 403 },
+      );
+    }
+  }
+
   const res = NextResponse.next();
 
   // 1er chargement embarqué (avant toute session) : Shopify appelle
