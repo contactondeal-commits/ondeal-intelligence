@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { RecommendationGroup } from "@/lib/intelligence/group";
@@ -104,6 +105,7 @@ export default function DecisionCard({
   actionsByRecommendation = {},
   nested = false,
   defaultCollapsed = false,
+  hideWorkspaceLink = false,
 }: {
   group: RecommendationGroup;
   storeId: string;
@@ -113,6 +115,8 @@ export default function DecisionCard({
   nested?: boolean;
   /** Carte repliée par défaut (en-tête seul : signal, titre, prochaine action, état) — ouverte au clic ou dès qu'une décision est engagée. */
   defaultCollapsed?: boolean;
+  /** Masque le lien "Fiche complète" — la page /decisions/[recommendationId] (lot 7) l'utilise déjà pour se rendre elle-même, un lien vers elle-même n'aurait aucun sens. */
+  hideWorkspaceLink?: boolean;
 }) {
   const meta = SEVERITY_META[group.severity as keyof typeof SEVERITY_META] ?? SEVERITY_META.SUGGESTION;
   const Icon = meta.icon;
@@ -392,6 +396,11 @@ export default function DecisionCard({
             <button type="button" className="decision-toggle" aria-expanded={isOpen} onClick={() => setOpen((o) => !o)}>
               {isOpen ? "Réduire" : "Détails"}
             </button>
+          )}
+          {!nested && !hideWorkspaceLink && (
+            <Link href={`/decisions/${representative.id}?store=${storeId}`} className="decision-toggle">
+              Fiche complète
+            </Link>
           )}
         </div>
       </header>

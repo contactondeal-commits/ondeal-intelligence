@@ -336,7 +336,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
               {topGroups.map((g) => {
                 const meta = SEVERITY_META[g.severity as keyof typeof SEVERITY_META] ?? SEVERITY_META.SUGGESTION;
                 const payload = g.representative.actionPayloadJson ? (JSON.parse(g.representative.actionPayloadJson) as { variantId?: string }) : null;
-                const href = g.representative.actionType === "update_price" && payload?.variantId ? `/pricing/${payload.variantId}?store=${store.id}` : `/intelligence?store=${store.id}&q=${encodeURIComponent(g.product?.title ?? g.title)}`;
+                // Prix → sa fiche variante dédiée (plus riche : simulateur, coûts, marge — voir /pricing/[variantId]).
+                // Tout le reste (stock, avis, marketing, qualité de données) → le Decision Workspace générique
+                // (lot 7) via un lien stable sur l'id de la recommandation, plutôt que l'ancien repli par
+                // recherche texte sur /intelligence (fragile : pouvait manquer la bonne carte ou en trouver une autre).
+                const href = g.representative.actionType === "update_price" && payload?.variantId ? `/pricing/${payload.variantId}?store=${store.id}` : `/decisions/${g.representative.id}?store=${store.id}`;
                 return (
                   <li key={g.key} className={`priority-row priority-row-${meta.cls}`}>
                     <Link href={href} className="priority-row-link">

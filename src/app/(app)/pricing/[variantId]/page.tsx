@@ -264,6 +264,7 @@ export default async function VariantWorkspacePage({
             }}
             storeId={store.id}
             existingAction={serializedAction}
+            hideWorkspaceLink
           />
         </section>
       ) : (
