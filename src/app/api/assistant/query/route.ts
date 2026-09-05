@@ -173,12 +173,19 @@ export async function POST(req: NextRequest) {
 
   const answer = await answerQuestion(question, ctx);
 
+  // MINIMISATION (audit conformité 05/09/2026) — le texte libre de la
+  // question n'est plus persisté ici : il peut contenir une donnée
+  // personnelle qu'un marchand aurait collée par inadvertance, et ce journal
+  // est visible par toute l'équipe de l'organisation (page /audit-log), sans
+  // durée de rétention. Seule l'intention détectée (enum fermé) et la
+  // longueur de la question sont conservées — suffisant pour la traçabilité
+  // fonctionnelle, sans reconstituer le contenu exact tapé par l'utilisateur.
   await logAudit({
     storeId,
     userId,
     actorType: "user",
     event: "assistant.query",
-    message: `Question posée à l'assistant : "${question}" (intention détectée : ${answer.matchedIntent ?? "aucune"}).`,
+    message: `Question posée à l'assistant (intention détectée : ${answer.matchedIntent ?? "aucune"}, ${question.length} caractère(s)).`,
   });
 
   return NextResponse.json(answer);

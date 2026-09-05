@@ -128,6 +128,13 @@ export default function LoginPage() {
           <p style={{ fontSize: 13.5, marginTop: 18, textAlign: "center", color: "var(--color-text-muted)" }}>
             Pas encore de compte ? <Link href="/signup" style={{ color: "var(--color-primary-dark)", fontWeight: 700 }}>Demander un accès</Link>
           </p>
+          <p style={{ fontSize: 12, marginTop: 14, textAlign: "center", color: "var(--color-text-muted)" }}>
+            <Link href="/mentions-legales" style={{ color: "inherit" }}>Mentions légales</Link>
+            {" · "}
+            <Link href="/privacy" style={{ color: "inherit" }}>Confidentialité</Link>
+            {" · "}
+            <Link href="/cgu" style={{ color: "inherit" }}>CGU</Link>
+          </p>
         </div>
       </div>
     </div>

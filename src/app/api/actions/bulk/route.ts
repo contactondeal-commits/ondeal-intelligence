@@ -5,6 +5,7 @@ import { logAudit } from "@/lib/audit";
 import { resolveCostInputs } from "@/lib/intelligence/costs";
 import { computeBulkPrice, type BulkPricingRule } from "@/lib/intelligence/bulkPricing";
 import { POST as createSingleAction } from "@/app/api/actions/route";
+import { hasFeature, planForStore } from "@/lib/plan-limits";
 
 const MAX_BULK_ITEMS = 50;
 
@@ -43,6 +44,15 @@ export async function POST(req: NextRequest) {
 
   try {
     const { userId } = await requireStoreAccess(storeId);
+
+    // VERROU DE PLAN CÔTÉ SERVEUR (audit conformité 05/09/2026) — les
+    // actions groupées sont présentées dans Paramètres comme réservées
+    // BUSINESS/AGENCY ("Automatisations avancées"), mais rien ne le
+    // vérifiait côté API avant ce correctif.
+    const plan = await planForStore(storeId);
+    if (!hasFeature(plan, "advanced_automations")) {
+      return NextResponse.json({ error: "Les actions groupées nécessitent le plan BUSINESS ou supérieur." }, { status: 403 });
+    }
 
     const items: Array<{
       recommendationId: string;

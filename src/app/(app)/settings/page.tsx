@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Building2, Store as StoreIcon, Plug, Users } from "lucide-react";
+import { Building2, Store as StoreIcon, Plug, Users, ShieldCheck } from "lucide-react";
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
@@ -80,6 +80,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         </a>
         <a href="#equipe" className="segment-tab">
           Équipe
+        </a>
+        <a href="#confidentialite" className="segment-tab">
+          Confidentialité &amp; légal
         </a>
       </nav>
 
@@ -251,6 +254,56 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           </table>
         </div>
         <p className="cell-sub">L&apos;invitation de membres n&apos;est pas encore disponible dans cette version.</p>
+      </section>
+
+      {/* Confidentialité & légal (audit conformité 05/09/2026) — accès depuis
+          l'app aux pages légales publiques, et point d'entrée unique pour
+          les demandes RGPD (export/suppression) sur les données de compte. */}
+      <section className="card cc-card" id="confidentialite" aria-labelledby="s-legal">
+        <h2 id="s-legal" className="cc-card-title">
+          <ShieldCheck size={15} aria-hidden="true" /> Confidentialité &amp; légal
+        </h2>
+        <p className="cell-sub">
+          Documents légaux d&apos;OnDeal Intelligence, et vos droits sur vos données personnelles (RGPD).
+        </p>
+        <div className="feature-chips">
+          <Link href="/mentions-legales" target="_blank" className="rail-chip is-active">
+            Mentions légales
+          </Link>
+          <Link href="/privacy" target="_blank" className="rail-chip is-active">
+            Confidentialité
+          </Link>
+          <Link href="/cgu" target="_blank" className="rail-chip is-active">
+            CGU
+          </Link>
+          <Link href="/cgv" target="_blank" className="rail-chip is-active">
+            CGV
+          </Link>
+          <Link href="/cookies" target="_blank" className="rail-chip is-active">
+            Cookies
+          </Link>
+          <Link href="/dpa" target="_blank" className="rail-chip is-active">
+            DPA
+          </Link>
+          <Link href="/sous-traitants" target="_blank" className="rail-chip is-active">
+            Sous-traitants
+          </Link>
+          <Link href="/securite" target="_blank" className="rail-chip is-active">
+            Sécurité
+          </Link>
+        </div>
+        <p className="cell-sub" style={{ marginTop: 12 }}>
+          Pour exercer votre droit d&apos;accès, de rectification, d&apos;effacement ou de portabilité sur vos données
+          de compte, écrivez-nous — indiquez votre organisation ({store.organizationName}) pour accélérer le
+          traitement de votre demande.
+        </p>
+        <a
+          href={`mailto:contact@ondeal.fr?subject=${encodeURIComponent(`Demande RGPD — ${store.organizationName}`)}`}
+          className="btn btn-secondary"
+          style={{ alignSelf: "flex-start" }}
+        >
+          Demander l&apos;export ou la suppression de mes données
+        </a>
       </section>
     </AppShell>
   );

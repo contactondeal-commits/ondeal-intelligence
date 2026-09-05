@@ -9,6 +9,14 @@ const schema = z.object({
   email: z.string().email(),
   password: z.string().min(8, "8 caractères minimum.").max(128, "128 caractères maximum."),
   organizationName: z.string().min(1).max(160),
+  // Case CGU/confidentialité obligatoire (audit conformité 05/09/2026) —
+  // le compte n'est créé que si l'acceptation explicite est transmise.
+  // Pas de champ dédié en base (aucune migration Prisma possible depuis cet
+  // environnement contre la base de production) : ce contrôle serveur est
+  // la garantie qu'aucun compte n'est créé sans cette acceptation.
+  acceptedTerms: z
+    .boolean()
+    .refine((v) => v === true, { message: "Vous devez accepter les CGU et la politique de confidentialité." }),
 });
 
 export async function POST(req: NextRequest) {

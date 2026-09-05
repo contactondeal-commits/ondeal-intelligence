@@ -4,6 +4,7 @@ import { requireStoreAccess, requireRole, WRITE_ROLES, AuthError } from "@/lib/a
 import { logAudit } from "@/lib/audit";
 import { POST as confirmSingleAction } from "@/app/api/actions/[id]/confirm/route";
 import { POST as executeSingleAction } from "@/app/api/actions/[id]/execute/route";
+import { hasFeature, planForStore } from "@/lib/plan-limits";
 
 const MAX_BULK_ITEMS = 50;
 
@@ -40,6 +41,13 @@ export async function POST(req: NextRequest) {
   try {
     const { userId, role } = await requireStoreAccess(storeId);
     requireRole(role, WRITE_ROLES);
+
+    // VERROU DE PLAN CÔTÉ SERVEUR (audit conformité 05/09/2026) — même
+    // règle que /api/actions/bulk : réservé BUSINESS/AGENCY.
+    const plan = await planForStore(storeId);
+    if (!hasFeature(plan, "advanced_automations")) {
+      return NextResponse.json({ error: "Les actions groupées nécessitent le plan BUSINESS ou supérieur." }, { status: 403 });
+    }
 
     const results: Array<{
       actionId: string;

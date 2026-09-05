@@ -230,7 +230,14 @@ export async function answerQuestion(question: string, ctx: AssistantContext): P
 
   const { answer, dataPoints } = intent.build(ctx);
 
-  const llmAnswer = await tryFormatWithLLM(question, answer, dataPoints);
+  // MINIMISATION DES DONNÉES (audit conformité 05/09/2026) — le texte libre
+  // de la question n'est JAMAIS transmis à Anthropic : seule l'intention
+  // détectée (un enum fermé, jamais du texte libre non contrôlé) part vers
+  // le fournisseur IA externe. Un marchand qui coller une donnée personnelle
+  // de client dans sa question ne la fait donc plus fuiter vers l'API IA —
+  // la qualité de la reformulation n'en dépend pas : la réponse est de toute
+  // façon entièrement dérivée de `factsText`, jamais de la question elle-même.
+  const llmAnswer = await tryFormatWithLLM(intent.key, answer);
   if (llmAnswer) {
     return { question, matchedIntent: intent.key, answer: llmAnswer, dataPoints, generatedBy: "llm" };
   }
@@ -241,17 +248,16 @@ export async function answerQuestion(question: string, ctx: AssistantContext): P
 /**
  * Reformule le texte déterministe en langage plus naturel via l'API
  * Anthropic — UNIQUEMENT si ANTHROPIC_API_KEY est configurée. Le modèle ne
- * reçoit que le texte déjà calculé (`factsText`) comme unique source de
- * vérité et l'instruction explicite de ne jamais ajouter de chiffre ou de
- * fait qui n'y figure pas. En cas d'erreur ou d'absence de clé, retourne
- * `null` et l'appelant garde la réponse déterministe (jamais d'échec
- * silencieux masqué par une réponse inventée).
+ * reçoit QUE l'intention détectée (enum fermé, ex. "stock_risk") et le texte
+ * déjà calculé (`factsText`) comme unique source de vérité, avec
+ * l'instruction explicite de ne jamais ajouter de chiffre ou de fait qui n'y
+ * figure pas. Le texte libre de la question de l'utilisateur n'est JAMAIS
+ * transmis ici (minimisation des données envoyées à un fournisseur IA
+ * externe — audit conformité 05/09/2026). En cas d'erreur ou d'absence de
+ * clé, retourne `null` et l'appelant garde la réponse déterministe (jamais
+ * d'échec silencieux masqué par une réponse inventée).
  */
-async function tryFormatWithLLM(
-  question: string,
-  factsText: string,
-  _dataPoints: Record<string, unknown>,
-): Promise<string | null> {
+async function tryFormatWithLLM(intentKey: string, factsText: string): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
 
@@ -273,7 +279,7 @@ async function tryFormatWithLLM(
         messages: [
           {
             role: "user",
-            content: `Question de l'utilisateur : "${question}"\n\nFAITS (source unique de vérité, ne rien ajouter) :\n${factsText}`,
+            content: `Intention détectée : ${intentKey}\n\nFAITS (source unique de vérité, ne rien ajouter) :\n${factsText}`,
           },
         ],
       }),

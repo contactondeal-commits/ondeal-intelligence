@@ -23,6 +23,7 @@ import { fetchCurrentStockFields, fetchCurrentStockFieldsMulti } from "@/lib/int
 import { resolveCostInputs } from "@/lib/intelligence/costs";
 import { isPricePrediction, measurePriceOutcome } from "@/lib/intelligence/prediction";
 import type { ExecutionOutcome } from "@/lib/intelligence/actionKind";
+import { hasFeature, planForStore } from "@/lib/plan-limits";
 
 /** Refus d'exécution pour cause de simulation obsolète — porte le détail de ce qui a changé jusqu'au résultat persisté, sans jamais l'exécuter aveuglément. */
 // Erreur métier volontairement lisible par l'utilisateur (message français
@@ -66,6 +67,16 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   }
   if (action.sensitivity === "SAFE" && !["PENDING_VALIDATION", "CONFIRMED"].includes(action.status)) {
     return NextResponse.json({ error: `Action déjà au statut ${action.status}.` }, { status: 409 });
+  }
+
+  // VERROU DE PLAN CÔTÉ SERVEUR (défense en profondeur, audit conformité
+  // 05/09/2026) — revérifié ici en plus de /confirm, au cas où une action
+  // aurait été confirmée avant ce correctif ou via un autre chemin.
+  if (action.type === "update_price") {
+    const plan = await planForStore(action.storeId);
+    if (!hasFeature(plan, "pricing")) {
+      return NextResponse.json({ error: "Le changement de prix nécessite le plan PRO ou supérieur." }, { status: 403 });
+    }
   }
 
   const payload = JSON.parse(action.payloadJson) as Record<string, unknown>;

@@ -46,11 +46,20 @@ describe("isStripeConfigured — jamais un bouton actif sans configuration compl
     expect(isStripeConfigured()).toBe(false);
   });
 
-  it("true si la clé secrète et les 3 Price sont configurés", () => {
+  it("false si la clé secrète et les 3 Price sont configurés mais pas le secret webhook (audit conformité 05/09/2026 — sinon un paiement pourrait être capturé sans jamais activer le plan)", () => {
     process.env.STRIPE_SECRET_KEY = "sk_test_x";
     process.env.STRIPE_PRICE_PRO = "price_pro";
     process.env.STRIPE_PRICE_BUSINESS = "price_business";
     process.env.STRIPE_PRICE_AGENCY = "price_agency";
+    expect(isStripeConfigured()).toBe(false);
+  });
+
+  it("true si la clé secrète, les 3 Price et le secret webhook sont tous configurés", () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_x";
+    process.env.STRIPE_PRICE_PRO = "price_pro";
+    process.env.STRIPE_PRICE_BUSINESS = "price_business";
+    process.env.STRIPE_PRICE_AGENCY = "price_agency";
+    process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
     expect(isStripeConfigured()).toBe(true);
   });
 });

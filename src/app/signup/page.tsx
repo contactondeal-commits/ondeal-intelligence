@@ -7,17 +7,24 @@ import Link from "next/link";
 export default function SignupPage() {
   const router = useRouter();
   const [form, setForm] = useState({ name: "", email: "", password: "", organizationName: "" });
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    // Case CGU/confidentialité obligatoire (audit conformité 05/09/2026) —
+    // validée aussi côté serveur, ce contrôle client n'est qu'un confort.
+    if (!acceptedTerms) {
+      setError("Vous devez accepter les CGU et la politique de confidentialité pour créer un compte.");
+      return;
+    }
     setLoading(true);
     setError(null);
     const res = await fetch("/api/auth/signup", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ ...form, acceptedTerms }),
     });
     setLoading(false);
     if (!res.ok) {
@@ -70,12 +77,40 @@ export default function SignupPage() {
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />
           </div>
-          <button className="btn btn-primary" type="submit" disabled={loading} style={{ width: "100%", marginTop: 8 }}>
+          <div className="field" style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 4 }}>
+            <input
+              id="acceptedTerms"
+              type="checkbox"
+              required
+              checked={acceptedTerms}
+              onChange={(e) => setAcceptedTerms(e.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <label htmlFor="acceptedTerms" style={{ fontSize: 13, color: "#6b6b85", fontWeight: 400 }}>
+              J&apos;accepte les{" "}
+              <Link href="/cgu" target="_blank" style={{ color: "#4f46e5", fontWeight: 700 }}>
+                CGU
+              </Link>{" "}
+              et la{" "}
+              <Link href="/privacy" target="_blank" style={{ color: "#4f46e5", fontWeight: 700 }}>
+                politique de confidentialité
+              </Link>{" "}
+              d&apos;OnDeal Intelligence.
+            </label>
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={loading || !acceptedTerms} style={{ width: "100%", marginTop: 12 }}>
             {loading ? "Création…" : "Créer mon compte"}
           </button>
         </form>
         <p style={{ fontSize: 13.5, marginTop: 18, textAlign: "center", color: "#6b6b85" }}>
           Déjà un compte ? <Link href="/login" style={{ color: "#4f46e5", fontWeight: 700 }}>Se connecter</Link>
+        </p>
+        <p style={{ fontSize: 12, marginTop: 14, textAlign: "center", color: "#6b6b85" }}>
+          <Link href="/mentions-legales" style={{ color: "inherit" }}>Mentions légales</Link>
+          {" · "}
+          <Link href="/privacy" style={{ color: "inherit" }}>Confidentialité</Link>
+          {" · "}
+          <Link href="/cgu" style={{ color: "inherit" }}>CGU</Link>
         </p>
       </div>
     </div>

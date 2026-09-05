@@ -1,6 +1,7 @@
 import { requireStore } from "@/lib/store-context";
 import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
+import { hasFeature } from "@/lib/plan-limits";
 
 const FILTERS: Array<{ key: string; label: string; match: (event: string) => boolean }> = [
   { key: "all", label: "Tout", match: () => true },
@@ -21,6 +22,25 @@ const EVENT_DOT: Record<string, string> = {
 export default async function AuditLogPage({ searchParams }: { searchParams: Promise<{ store?: string; filter?: string }> }) {
   const params = await searchParams;
   const store = await requireStore(params);
+
+  // VERROU DE PLAN CÔTÉ SERVEUR (audit conformité 05/09/2026) — "Historique"
+  // est présenté dans Paramètres comme réservé BUSINESS/AGENCY, mais la page
+  // n'appliquait jusqu'ici aucune vérification serveur (accessible à tout
+  // plan connaissant l'URL). Repli visuel plutôt qu'un blocage brutal.
+  if (!hasFeature(store.plan, "audit_log")) {
+    return (
+      <AppShell store={store} active="/audit-log">
+        <h1 className="page-title">Historique</h1>
+        <div className="card">
+          <p className="unavailable-note">
+            L&apos;historique complet des événements est disponible avec le plan BUSINESS et supérieur. Passez à un plan
+            supérieur depuis Paramètres pour y accéder.
+          </p>
+        </div>
+      </AppShell>
+    );
+  }
+
   const activeFilter = FILTERS.some((f) => f.key === params.filter) ? params.filter! : "all";
 
   const logs = await prisma.auditLog.findMany({

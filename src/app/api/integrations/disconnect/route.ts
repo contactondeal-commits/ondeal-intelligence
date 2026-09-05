@@ -6,7 +6,7 @@ import { logAudit } from "@/lib/audit";
 
 export async function POST(req: NextRequest) {
   const parsed = z
-    .object({ storeId: z.string().min(1).max(64), provider: z.enum(["SHOPIFY", "JUDGEME", "WOOCOMMERCE", "PRESTASHOP"]) })
+    .object({ storeId: z.string().min(1).max(64), provider: z.enum(["SHOPIFY", "JUDGEME", "WOOCOMMERCE", "PRESTASHOP", "CJDROPSHIPPING"]) })
     .strict()
     .safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Champs manquants ou invalides." }, { status: 400 });

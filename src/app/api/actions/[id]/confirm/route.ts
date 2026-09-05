@@ -19,6 +19,7 @@ import { buildPriceSnapshot, buildStockSnapshot } from "@/lib/intelligence/snaps
 import { resolveCostInputs } from "@/lib/intelligence/costs";
 import { buildPricePrediction } from "@/lib/intelligence/prediction";
 import { fetchCurrentStockFields } from "@/lib/intelligence/stockEvidence";
+import { hasFeature, planForStore } from "@/lib/plan-limits";
 
 // PHASE 13 — étape de validation humaine explicite, distincte de l'exécution.
 // "Cette action va modifier votre boutique." → Annuler / Confirmer.
@@ -40,6 +41,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     requireRole(role, WRITE_ROLES);
     if (action.status !== "PENDING_VALIDATION") {
       return NextResponse.json({ error: `Action déjà au statut ${action.status}.` }, { status: 409 });
+    }
+
+    // VERROU DE PLAN CÔTÉ SERVEUR (audit conformité 05/09/2026) — un
+    // changement de prix réel sur Shopify est une fonctionnalité "pricing"
+    // (plan PRO et supérieur). Avant ce correctif, rien n'empêchait un
+    // compte STARTER de confirmer/exécuter cette action via l'API, même si
+    // l'UI (marge masquée) laissait croire le contraire. Ne concerne QUE
+    // "update_price" — le stock (update_stock) et la publication
+    // (publish/unpublish_product) restent disponibles à tous les plans.
+    if (action.type === "update_price") {
+      const plan = await planForStore(action.storeId);
+      if (!hasFeature(plan, "pricing")) {
+        return NextResponse.json({ error: "Le changement de prix nécessite le plan PRO ou supérieur." }, { status: 403 });
+      }
     }
 
     // Pour les actions de type "update_price" / "update_stock", le nouveau

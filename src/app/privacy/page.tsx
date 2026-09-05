@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
 };
 
-const LAST_UPDATED = "4 septembre 2026";
+const LAST_UPDATED = "5 septembre 2026";
 
 /**
  * Politique de confidentialité de l'app Shopify OnDeal Intelligence — page
@@ -31,8 +31,10 @@ export default function PrivacyPolicyPage() {
 
         <h2>1. Responsable du traitement</h2>
         <p>
-          Alex Brou — OnDeal.fr, entreprise individuelle (auto-entrepreneur), 231 rue Saint-Honoré, 75001 Paris,
-          France. RCS 994 594 059. Contact : <a href="mailto:contact@ondeal.fr">contact@ondeal.fr</a>.
+          Monsieur Brou — OnDeal.fr, entrepreneur individuel (micro-entreprise), SIREN 994 594 059, SIRET (établissement
+          principal) 994 594 059 00010, 231 rue Saint-Honoré, 75001 Paris, France (adresse de domiciliation). Contact :{" "}
+          <a href="mailto:contact@ondeal.fr">contact@ondeal.fr</a>. Voir aussi les{" "}
+          <a href="/mentions-legales">mentions légales</a> pour le détail de l&apos;identité de l&apos;éditeur.
         </p>
 
         <h2>2. À qui s&apos;adresse cette page</h2>
@@ -74,10 +76,16 @@ export default function PrivacyPolicyPage() {
 
         <h2>4. Ce que nous ne collectons pas</h2>
         <p>
-          Le modèle de données d&apos;OnDeal Intelligence ne stocke <strong>aucune coordonnée nominative des
-          clients finaux</strong> de votre boutique (ni nom, ni e-mail, ni adresse de livraison) : les commandes
-          synchronisées ne conservent que des informations agrégées (référence, statut, montants, articles
+          Le modèle de données d&apos;OnDeal Intelligence ne stocke <strong>aucune coordonnée de contact des
+          clients finaux</strong> de votre boutique (ni e-mail, ni téléphone, ni adresse de livraison) : les
+          commandes synchronisées ne conservent que des informations agrégées (référence, statut, montants, articles
           commandés) nécessaires au calcul des indicateurs de vente et de marge.
+        </p>
+        <p>
+          Exception : lorsque vous connectez volontairement l&apos;intégration Judge.me (voir section 3), le nom
+          affiché par l&apos;auteur d&apos;un avis client (« authorName »), tel que rendu public par ce client sur votre
+          boutique, est synchronisé avec l&apos;avis afin de pouvoir l&apos;afficher dans l&apos;app. Il ne s&apos;agit
+          que du nom déjà rendu public par le client via son avis, jamais de son e-mail ni d&apos;une autre coordonnée.
         </p>
 
         <h2>5. Pourquoi nous traitons ces données</h2>
@@ -89,13 +97,19 @@ export default function PrivacyPolicyPage() {
         </p>
 
         <h2>6. Avec qui vos données sont partagées</h2>
-        <p>Vos données ne sont jamais vendues ni louées. Elles sont traitées par les sous-traitants suivants, strictement pour faire fonctionner l&apos;app :</p>
+        <p>
+          Vos données ne sont jamais vendues ni louées. Elles sont traitées par les sous-traitants suivants,
+          strictement pour faire fonctionner l&apos;app — liste détaillée (finalité, données, localisation) sur la
+          page dédiée <a href="/sous-traitants">Sous-traitants</a> :
+        </p>
         <ul>
-          <li><strong>Shopify International Limited</strong> — plateforme e-commerce, source des données de votre boutique.</li>
+          <li><strong>Shopify International Limited / WooCommerce / PrestaShop</strong> — plateforme e-commerce, source des données de votre boutique, selon celle que vous utilisez.</li>
           <li><strong>Vercel Inc.</strong> (440 N Barranca Avenue #4133, Covina, CA 91723, États-Unis) — hébergement de l&apos;application.</li>
           <li><strong>Neon</strong> — hébergement de la base de données PostgreSQL de l&apos;app.</li>
+          <li><strong>Stripe</strong> — uniquement si vous souscrivez un plan payant, pour le traitement du paiement de votre abonnement.</li>
           <li><strong>Judge.me</strong> — uniquement si vous connectez cette intégration, pour la récupération de vos avis produits.</li>
-          <li><strong>Anthropic</strong> — uniquement si l&apos;assistant OnDeal AI est activé sur votre organisation, pour générer les réponses en langage naturel.</li>
+          <li><strong>CJdropshipping</strong> — uniquement si vous connectez cette intégration, pour la synchronisation du stock fournisseur.</li>
+          <li><strong>Anthropic</strong> — uniquement si l&apos;assistant OnDeal AI est activé sur votre organisation, pour générer les réponses en langage naturel (seuls des faits déjà calculés et l&apos;intention détectée de la question sont transmis, jamais le texte brut ni de donnée personnelle de client final).</li>
         </ul>
 
         <h2>7. Sécurité</h2>
@@ -125,8 +139,10 @@ export default function PrivacyPolicyPage() {
         <ul>
           <li>
             <strong>Demande d&apos;accès aux données d&apos;un client</strong> (customers/data_request) — comme
-            décrit en section 4, l&apos;app ne détient aucune donnée nominative de client final : la demande est
-            consignée et confirmée sans donnée à transmettre.
+            décrit en section 4, l&apos;app ne détient, au titre des commandes, aucune coordonnée de contact du client
+            final ; seul le nom d&apos;auteur d&apos;un avis Judge.me, déjà public, peut exister le cas échéant. La
+            demande est consignée et, s&apos;il existe une telle donnée rattachée au client visé, celle-ci est
+            transmise ; à défaut, elle est confirmée sans donnée à transmettre.
           </li>
           <li>
             <strong>Demande d&apos;effacement des données d&apos;un client</strong> (customers/redact) — les

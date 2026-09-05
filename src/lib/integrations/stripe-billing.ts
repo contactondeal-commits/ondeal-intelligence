@@ -66,13 +66,19 @@ function priceIdForPlan(plan: PaidPlan): string | null {
 }
 
 /**
- * true seulement si TOUT ce qui est nécessaire pour accepter un paiement
- * Stripe est configuré (clé secrète + un Price par plan payant). Utilisé
- * partout où Stripe est proposé — jamais un bouton affiché qui échouerait
- * silencieusement faute de configuration ; message honnête à la place.
+ * true seulement si TOUT ce qui est nécessaire pour accepter ET ACTIVER un
+ * paiement Stripe est configuré (clé secrète + un Price par plan payant +
+ * le secret de signature webhook). CORRECTIF (audit conformité 05/09/2026) :
+ * sans STRIPE_WEBHOOK_SECRET, un marchand peut réellement payer chez Stripe
+ * (Checkout fonctionne avec la seule clé secrète) mais le webhook qui active
+ * le plan est systématiquement rejeté (signature invalide) — paiement
+ * encaissé, plan jamais activé, silencieusement. Inclure ce secret ici
+ * garantit qu'un bouton "Par carte" n'est jamais affiché comme opérationnel
+ * si ce cas de figure est possible.
  */
 export function isStripeConfigured(): boolean {
   if (!getSecretKey()) return false;
+  if (!process.env.STRIPE_WEBHOOK_SECRET) return false;
   return (Object.keys(PLAN_PRICING) as PaidPlan[]).every((p) => priceIdForPlan(p) !== null);
 }
 

@@ -6,6 +6,7 @@ import { logAudit } from "@/lib/audit";
 import { recomputeStoreIntelligence } from "@/lib/intelligence/pipeline";
 import { rebuildMarginSnapshots } from "@/lib/sync/shopifyStore";
 import { ORDERS_WINDOW_DAYS } from "@/lib/sync/pipeline";
+import { hasFeature, planForStore } from "@/lib/plan-limits";
 
 const schema = z.object({
   storeId: z.string().min(1).max(64),
@@ -23,6 +24,17 @@ export async function POST(req: NextRequest) {
   try {
     const { userId, role } = await requireStoreAccess(parsed.data.storeId);
     requireRole(role, WRITE_ROLES);
+
+    // VERROU DE PLAN CÔTÉ SERVEUR (audit conformité 05/09/2026) — les
+    // hypothèses de coût alimentent directement le calcul de marge, une
+    // fonctionnalité "pricing" réservée au plan PRO et supérieur. Avant ce
+    // correctif, seul l'AFFICHAGE frontend masquait la marge : un compte
+    // STARTER pouvait obtenir le calcul de marge gratuitement en appelant
+    // directement cette route. Jamais vérifié uniquement côté client.
+    const plan = await planForStore(parsed.data.storeId);
+    if (!hasFeature(plan, "pricing")) {
+      return NextResponse.json({ error: "Le calcul de marge (Prix & Marge) nécessite le plan PRO ou supérieur." }, { status: 403 });
+    }
 
     // Isolation multi-boutiques : le produit doit appartenir à la boutique
     // dont l'accès vient d'être vérifié (sinon un membre d'une autre
