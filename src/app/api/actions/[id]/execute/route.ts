@@ -147,7 +147,7 @@ function sleep(ms: number): Promise<void> {
 // jamais risquer de heurter la limite de débit CJ sur un seul clic humain.
 // Les variantes au-delà de ce plafond ne sont simplement pas vérifiées —
 // jamais un résultat inventé pour elles.
-const MAX_CJ_LOOKUPS_PER_EXECUTION = 20;
+export const MAX_CJ_LOOKUPS_PER_EXECUTION = 20;
 const CJ_LOOKUP_DELAY_MS = 350;
 
 /**
@@ -170,6 +170,25 @@ async function getCjCreds(storeId: string): Promise<CjCredentials | null> {
 }
 
 /**
+ * Résultat structuré PAR VARIANTE d'une vérification CJ — distinct du texte
+ * `detail` (lisible par un humain) pour que l'APPELANT PROGRAMMATIQUE (ex.
+ * `/api/stock/secure-ruptures`, correctif 05/09/2026 v3) puisse décider en
+ * toute sécurité si une action supplémentaire (dépublication) est justifiée,
+ * sans reparser du texte. `supplierConfirmedZero: true` est le SEUL signal
+ * qui doit jamais justifier une dépublication — jamais `resolvable: false`
+ * (SKU inconnu, CJ non connecté, erreur réseau : on ne SAIT pas, on ne
+ * suppose jamais une rupture confirmée par défaut).
+ */
+export interface CjCheckOutcome {
+  variantId: string;
+  resolvable: boolean;
+  supplierConfirmedZero: boolean;
+  correctedToShopify: boolean;
+  newQuantity: number | null;
+  line: string;
+}
+
+/**
  * Vérifie en direct auprès de CJ le stock réel des variantes fournies, et
  * met à jour `Variant.supplierStock` avec la valeur RÉELLE reçue — c'est ce
  * même champ que `supplierMismatch` (recommendations.ts) lit déjà pour
@@ -179,7 +198,7 @@ async function getCjCreds(storeId: string): Promise<CjCredentials | null> {
  * mission — cette vérification reste une enrichissement, jamais une
  * condition bloquante de "Vérifier le fournisseur".
  */
-async function checkCjStock(storeId: string, variantIds: string[]): Promise<string | null> {
+export async function checkCjStock(storeId: string, variantIds: string[]): Promise<{ detail: string; perVariant: CjCheckOutcome[] } | null> {
   const creds = await getCjCreds(storeId);
   if (!creds) return null;
 
@@ -211,6 +230,7 @@ async function checkCjStock(storeId: string, variantIds: string[]): Promise<stri
   }
 
   const lines: string[] = [];
+  const perVariant: CjCheckOutcome[] = [];
   let mismatchCount = 0;
   let confirmedCount = 0;
   let correctedCount = 0;
@@ -221,7 +241,9 @@ async function checkCjStock(storeId: string, variantIds: string[]): Promise<stri
     try {
       const stock = await queryCjVariantStock(creds, v.sku!);
       if (!stock) {
-        lines.push(`${v.title} (${v.sku}) : SKU inconnu chez CJ.`);
+        const line = `${v.title} (${v.sku}) : SKU inconnu chez CJ.`;
+        lines.push(line);
+        perVariant.push({ variantId: v.id, resolvable: false, supplierConfirmedZero: false, correctedToShopify: false, newQuantity: null, line });
         continue;
       }
       await prisma.variant.update({ where: { id: v.id }, data: { supplierStock: stock.cjInventory } });
@@ -232,19 +254,32 @@ async function checkCjStock(storeId: string, variantIds: string[]): Promise<stri
           if (res.ok) {
             await prisma.variant.update({ where: { id: v.id }, data: { inventoryQuantity: res.quantity } });
             correctedCount++;
-            lines.push(`${v.title} (${v.sku}) : stock corrigé automatiquement sur Shopify (0 → ${res.quantity} unité(s), confirmé par CJ).`);
+            const line = `${v.title} (${v.sku}) : stock corrigé automatiquement sur Shopify (0 → ${res.quantity} unité(s), confirmé par CJ).`;
+            lines.push(line);
+            perVariant.push({ variantId: v.id, resolvable: true, supplierConfirmedZero: false, correctedToShopify: true, newQuantity: res.quantity, line });
           } else {
-            lines.push(`${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s), mais la correction Shopify a échoué (${res.error}) — à corriger manuellement.`);
+            const line = `${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s), mais la correction Shopify a échoué (${res.error}) — à corriger manuellement.`;
+            lines.push(line);
+            // Ni "corrigé" ni "confirmé zéro" — CJ a du stock mais on n'a pas
+            // pu le pousser sur Shopify : jamais traité comme une rupture
+            // confirmée (on SAIT au contraire que du stock existe).
+            perVariant.push({ variantId: v.id, resolvable: true, supplierConfirmedZero: false, correctedToShopify: false, newQuantity: null, line });
           }
         } else {
-          lines.push(`${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s) — pas encore synchronisé sur Shopify.`);
+          const line = `${v.title} (${v.sku}) : CJ indique ${stock.cjInventory} unité(s) disponible(s) — pas encore synchronisé sur Shopify.`;
+          lines.push(line);
+          perVariant.push({ variantId: v.id, resolvable: true, supplierConfirmedZero: false, correctedToShopify: false, newQuantity: null, line });
         }
       } else {
         confirmedCount++;
-        lines.push(`${v.title} (${v.sku}) : CJ confirme 0 unité — rupture réelle chez le fournisseur.`);
+        const line = `${v.title} (${v.sku}) : CJ confirme 0 unité — rupture réelle chez le fournisseur.`;
+        lines.push(line);
+        perVariant.push({ variantId: v.id, resolvable: true, supplierConfirmedZero: true, correctedToShopify: false, newQuantity: null, line });
       }
     } catch (err) {
-      lines.push(`${v.title} (${v.sku}) : vérification CJ impossible (${err instanceof Error ? err.message : "erreur inconnue"}).`);
+      const line = `${v.title} (${v.sku}) : vérification CJ impossible (${err instanceof Error ? err.message : "erreur inconnue"}).`;
+      lines.push(line);
+      perVariant.push({ variantId: v.id, resolvable: false, supplierConfirmedZero: false, correctedToShopify: false, newQuantity: null, line });
     }
   }
 
@@ -257,7 +292,7 @@ async function checkCjStock(storeId: string, variantIds: string[]): Promise<stri
           ? `Vérifié en direct chez CJ : rupture confirmée réellement côté fournisseur pour ${confirmedCount} variante(s).`
           : "CJ n'a renvoyé aucune correspondance exploitable pour ces SKU.";
 
-  return [summary, ...lines].join("\n");
+  return { detail: [summary, ...lines].join("\n"), perVariant };
 }
 
 async function getShopifyCreds(storeId: string): Promise<ShopifyCredentials> {
@@ -471,10 +506,10 @@ export async function executeReviewSupplier(storeId: string, payload: Record<str
         ? (payload.variantIds as unknown[]).filter((v): v is string => typeof v === "string")
         : [];
 
-  let cjDetail: string | null = null;
+  let cjResult: { detail: string; perVariant: CjCheckOutcome[] } | null = null;
   if (variantIds.length > 0) {
     try {
-      cjDetail = await checkCjStock(storeId, variantIds);
+      cjResult = await checkCjStock(storeId, variantIds);
     } catch (err) {
       console.error("[actions/execute] vérification CJ échouée (non bloquant)", {
         storeId,
@@ -486,11 +521,11 @@ export async function executeReviewSupplier(storeId: string, payload: Record<str
   return {
     ok: true,
     kind: "manual_mission_completed",
-    detail: cjDetail ? `${baseDetail}\n\n${cjDetail}` : baseDetail,
+    detail: cjResult ? `${baseDetail}\n\n${cjResult.detail}` : baseDetail,
   };
 }
 
-async function executeUnpublish(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
+export async function executeUnpublish(storeId: string, payload: Record<string, unknown>): Promise<ExecutionOutcome> {
   const productId = payload.productId as string;
   if (!productId) throw new ExecutionError("Produit manquant dans l'action.");
   const product = await prisma.product.findFirst({ where: { id: productId, storeId } });

@@ -6,6 +6,7 @@ import Pagination from "@/components/ui/Pagination";
 import TableControls from "@/components/ui/TableControls";
 import DataTag from "@/components/ui/DataTag";
 import StockQuantityCell from "@/components/StockQuantityCell";
+import SecureRupturesPanel from "@/components/SecureRupturesPanel";
 import { parsePageParams } from "@/lib/pagination";
 import { analyzeStock, summarizeStock, type StockInput } from "@/lib/intelligence/stock";
 import { salesWindowStart, unitsSoldInWindow } from "@/lib/intelligence/salesWindow";
@@ -49,7 +50,7 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
   const status = STATUS_OPTIONS.some((o) => o.value === params.status) ? (params.status as string) : "all";
   const sort = SORT_OPTIONS.some((o) => o.value === params.sort) ? (params.sort as string) : "critical";
 
-  const [products, variants, salesInWindow, salesHistory, shopifyIntegration] = await Promise.all([
+  const [products, variants, salesInWindow, salesHistory, shopifyIntegration, cjIntegration] = await Promise.all([
     prisma.product.findMany({ where: { storeId: store.id }, select: { id: true, title: true, _count: { select: { variants: true } } } }),
     prisma.variant.findMany({
       where: { product: { storeId: store.id } },
@@ -58,11 +59,13 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
     prisma.salesSnapshot.groupBy({ by: ["productId"], where: { product: { storeId: store.id }, date: { gte: salesWindowStart() } }, _sum: { unitsSold: true } }),
     prisma.salesSnapshot.groupBy({ by: ["productId"], where: { product: { storeId: store.id } }, _count: true }),
     prisma.integration.findUnique({ where: { storeId_provider: { storeId: store.id, provider: "SHOPIFY" } }, select: { status: true } }),
+    prisma.integration.findUnique({ where: { storeId_provider: { storeId: store.id, provider: "CJDROPSHIPPING" } }, select: { status: true } }),
   ]);
   // Modification du stock réservée à Shopify (seule plateforme avec une
   // mutation d'écriture implémentée — voir actionKind.ts) : le contrôle
   // reste visible mais désactivé pour WooCommerce/PrestaShop, avec explication.
   const shopifyConnected = shopifyIntegration?.status === "CONNECTED";
+  const cjConnected = cjIntegration?.status === "CONNECTED";
   const productById = new Map(products.map((p) => [p.id, p]));
   const unitsByProduct = new Map(salesInWindow.map((s) => [s.productId, s._sum.unitsSold ?? 0]));
   const historyByProduct = new Set(salesHistory.map((s) => s.productId));
@@ -113,6 +116,8 @@ export default async function StockPage({ searchParams }: { searchParams: Promis
           </p>
         </div>
       </div>
+
+      <SecureRupturesPanel storeId={store.id} ruptureCount={summary.rupture} cjConnected={cjConnected} shopifyConnected={shopifyConnected} />
 
       <div className="stat-strip" role="list">
         <StatTile label="Variantes suivies" value={anyData ? analyses.length.toLocaleString("fr-FR") : "—"} tag="real" />
