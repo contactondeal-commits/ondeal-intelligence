@@ -8,9 +8,17 @@ import type { GenerateRequest, GenerateResult, ModelCapabilities, ModelProvider 
  * par un futur appelant (Job Engine) sans dupliquer le fetch une seconde
  * fois ailleurs.
  */
+// Tarifs vérifiés le 06/09/2026 contre la documentation officielle
+// (platform.claude.com/docs/en/about-claude/models/overview et
+// claude.com/pricing — les deux sources concordent). RÈGLE §57 de la
+// commande d'exécution : ne jamais se fier à la mémoire pour un tarif, TOUJOURS
+// revérifier la doc officielle avant d'utiliser un chiffre de coût. Le tarif
+// précédent de claude-fable-5-1 (3$/15$) était FAUX (deviné, jamais vérifié) —
+// corrigé ici vers le tarif officiel réel. maxContextTokens pour fable est
+// également corrigé (1M, pas 200K, par la même doc).
 const ANTHROPIC_CAPABILITIES: Record<string, ModelCapabilities> = {
   "claude-haiku-4-5-20251001": { maxContextTokens: 200_000, vision: true, toolUse: true, costPerMTokIn: 1, costPerMTokOut: 5 },
-  "claude-fable-5-1": { maxContextTokens: 200_000, vision: true, toolUse: true, costPerMTokIn: 3, costPerMTokOut: 15 },
+  "claude-fable-5-1": { maxContextTokens: 1_000_000, vision: true, toolUse: true, costPerMTokIn: 10, costPerMTokOut: 50 },
 };
 
 interface AnthropicContentBlock {
