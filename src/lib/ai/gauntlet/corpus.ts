@@ -134,6 +134,104 @@ export const GAUNTLET_CORPUS: GauntletTask[] = [
       "le modèle utilisé a capabilities().vision === true (refus explicite sinon, voir tests/coderVision.test.ts)",
     ],
   },
+  // --- PHASE 4 (06/09/2026) — Supervisor / Storefront Intelligence Engine ---
+  // Huit tâches, chacune RÉELLEMENT accomplie par la première mission
+  // Storefront (cmtplqkw200007des7ajp1u7p, exécutée via
+  // scripts/simulate-storefront-mission.ts, mécanique 100% réelle — graphe
+  // persisté en base, VRAIE CoderMission imbriquée cmtplqkz0000b7desdzj49idt
+  // — seul le modèle est un double scripté, voir ce script).
+
+  {
+    id: "storefront_dynamic_decomposition_login",
+    category: "dynamic_decomposition",
+    description:
+      "À partir d'un objectif de haut niveau (« construire une candidate premium pour /login ») et d'un World State réel (repo, tokens CSS, composants existants), le Supervisor décompose en un GRAPHE de 10 nodes avec dépendances explicites (5 analyses indépendantes → direction créative → synthèse → implémentation → critic → juge) — jamais un plan linéaire codé en dur.",
+    source: "Mission cmtplqkw200007des7ajp1u7p (06/09/2026) — plan réellement persisté dans storefront_mission_nodes, 10 lignes, dependsOnJson vérifié cohérent avec l'ordre d'exécution réel observé.",
+    expectedCriteria: [
+      "les 5 nodes d'analyse (brand/ux/cro/a11y/perf) ont dependsOn=[] et s'exécutent avant tout node qui en dépend",
+      "un node dont une dépendance échoue est marqué SKIPPED en cascade, jamais laissé PENDING indéfiniment (aucun deadlock)",
+      "le graphe est relu depuis la base (listNodes) et correspond exactement à ce que le plan a produit — jamais une étape silencieusement absente",
+    ],
+  },
+  {
+    id: "storefront_brand_bridge_login_card",
+    category: "brand_reasoning",
+    description:
+      "Identifier, à partir du code réel (page.tsx + tokens CSS mesurés), que le panneau marketing de /login porte une identité de marque forte (dégradé --color-accent/--color-warning) alors que la carte de connexion (.auth-card) n'en porte aucune trace visuelle — puis recommander un bridge MINIMAL (fine barre d'accent) plutôt qu'une réécriture complète, cohérent avec la règle « ne pas forcer une esthétique générique ».",
+    source: "Node brand_audit, mission cmtplqkw200007des7ajp1u7p — recommandation reprise telle quelle par creative_directions (direction unified_premium_surface) puis par synthesis.",
+    expectedCriteria: [
+      "la recommandation cite des éléments RÉELS du code (nom de classe CSS, valeur hexadécimale de token) — jamais une généralité sans ancrage",
+      "l'implémentation qui en découle (diff réel) ne modifie que .auth-card (aucune autre surface touchée)",
+    ],
+  },
+  {
+    id: "storefront_cro_hypothesis_no_fake_metric",
+    category: "cro_hypothesis",
+    description:
+      "Formuler une hypothèse de réduction de friction (rapprocher un signal de confiance existant du point de décision) SANS jamais affirmer un pourcentage d'amélioration de conversion, en citant explicitement l'absence de donnée réelle (real_conversion_rate=INSUFFICIENT_DATA dans le World State) — conformément à la règle « No Fake Metrics ».",
+    source: "Node cro_audit, mission cmtplqkw200007des7ajp1u7p.",
+    expectedCriteria: [
+      "aucun chiffre de conversion (%, taux, nombre) n'apparaît dans data ni findings",
+      "uncertainties mentionne explicitement l'absence de mesure réelle disponible",
+    ],
+  },
+  {
+    id: "storefront_accessibility_real_contrast_measurement",
+    category: "accessibility_measurement",
+    description:
+      "Calculer RÉELLEMENT (formule de luminance relative WCAG, pas une estimation) le ratio de contraste entre --color-text-faint (#737893) et --color-surface (#131730) utilisés par .auth-social-proof — 4.05:1, sous le seuil AA texte normal (4.5:1) — et recommander le remplacement par --color-text-muted (#a4a9c4, 7.59:1), déjà défini dans le design system, jamais une nouvelle couleur inventée.",
+    source: "Node a11y_audit, mission cmtplqkw200007des7ajp1u7p — implémenté tel quel dans le diff réel de globals.css (voir CoderMission cmtplqkz0000b7desdzj49idt), vérifié visuellement sur les captures desktop-1440/mobile-390 réelles.",
+    expectedCriteria: [
+      "le ratio de contraste rapporté correspond au calcul réel (tolérance ±0.05) à partir des valeurs hexadécimales exactes du design system",
+      "le token recommandé en remplacement existe déjà dans :root (jamais une nouvelle variable CSS inventée pour ce correctif)",
+    ],
+  },
+  {
+    id: "storefront_synthesize_three_directions",
+    category: "multi_strategy_synthesis",
+    description:
+      "À partir de 3 directions créatives réellement distinctes (pas la même page avec 3 couleurs — trust_anchor / unified_premium_surface / editorial_social_proof_band), évaluer chacune sur des critères explicites et produire une synthèse combinant DEUX directions complémentaires (SYNTHESIZED) tout en rejetant explicitement la troisième avec une raison réelle (risque structurel plus élevé pour un bénéfice incertain) — jamais un choix par défaut sans justification.",
+    source: "Nodes creative_directions + synthesis, mission cmtplqkw200007des7ajp1u7p — finalBrief implémenté tel quel (diff réel vérifié : combine exactement la micro-copy de confiance de trust_anchor et la barre d'accent d'unified_premium_surface, aucune trace d'editorial_social_proof_band dans le diff).",
+    expectedCriteria: [
+      "les 3 directions ont des champs strategy/story/hierarchy/visualPhilosophy/commerceReasoning réellement différents (pas des paraphrases les unes des autres)",
+      "la direction rejetée a une raison de rejet réelle et spécifique, jamais une phrase générique",
+      "le finalBrief de synthèse se retrouve traçable dans le diff réellement produit par la CoderMission",
+    ],
+  },
+  {
+    id: "storefront_adversarial_critic_mandatory_rejection_case",
+    category: "adversarial_self_critique",
+    description:
+      "Même quand le verdict final est PASS, produire un « rejectionCase » réel et spécifique (§38 : « pourquoi cette candidate devrait-elle être rejetée ? ») plutôt qu'un texte de complaisance — ici : absence de toute mesure réelle de bénéfice + revue d'accessibilité limitée à un seul contraste, non une revue complète (clavier/lecteur d'écran).",
+    source: "Node critic, mission cmtplqkw200007des7ajp1u7p.",
+    expectedCriteria: [
+      "rejectionCase est non vide MÊME quand verdict=PASS",
+      "rejectionCase cite un risque réel et spécifique à CETTE candidate, jamais une réserve générique applicable à n'importe quelle mission",
+    ],
+  },
+  {
+    id: "storefront_independent_judge_scope_boundary",
+    category: "independent_verdict",
+    description:
+      "Décider READY_FOR_RELEASE en distinguant explicitement ce qui bloque une comparaison en preview (aucun blocage réel trouvé) de ce qui bloquerait un déploiement en PRODUCTION réelle (mesure de bénéfice absente, revue a11y non exhaustive) — sans jamais confondre les deux seuils, et sans jamais laisser le Coder Agent s'auto-déclarer en succès (le node coder_implementation ne produit qu'un rapport factuel, jamais un verdict).",
+    source: "Node judge, mission cmtplqkw200007des7ajp1u7p — verdict READY_FOR_RELEASE, mission qui s'arrête bien là (aucun déploiement automatique en production, voir graphRunner.ts::runStorefrontMission).",
+    expectedCriteria: [
+      "le verdict cite explicitement les preuves réellement examinées (evidenceReviewed non générique : diff, typecheck/lint/test/build, revue visuelle, rapport critic)",
+      "la mission StorefrontMission se termine SUCCEEDED SANS qu'aucun code ne soit écrit dans le dépôt réel /tmp/ondeal-dev (seul le workspace isolé de la CoderMission est modifié)",
+    ],
+  },
+  {
+    id: "storefront_candidate_vs_production_before_after",
+    category: "candidate_comparison",
+    description:
+      "Produire des captures d'écran RÉELLES avant/après à deux largeurs de viewport (desktop 1440px, mobile 390px) du dépôt source inchangé et du workspace de mission déjà buildé, permettant une comparaison visuelle directe candidate-vs-production sans qu'aucune image ne soit une image de substitution.",
+    source: "scripts/capture-before-after-screenshots.ts, mission cmtplqkw200007des7ajp1u7p — 4 PNG réels produits et inspectés individuellement (rapport de session).",
+    expectedCriteria: [
+      "les captures « avant » proviennent d'un build antérieur à l'édition (BUILD_ID horodaté avant la création de la CoderMission)",
+      "les captures « après » montrent la barre d'accent et la micro-copy de confiance réellement rendues, sans débordement ni élément cassé",
+    ],
+  },
+
   {
     id: "coder_visual_fix_input_contrast_loop",
     category: "visual_fix",

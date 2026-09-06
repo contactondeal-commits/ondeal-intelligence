@@ -31,11 +31,18 @@ function assertOriginAllowed(url: string, allowedOrigins: string[]): void {
   }
 }
 
-export async function openBrowser(url: string, allowedOrigins: string[]): Promise<BrowserSession> {
+export async function openBrowser(
+  url: string,
+  allowedOrigins: string[],
+  viewport?: { width: number; height: number },
+): Promise<BrowserSession> {
   assertOriginAllowed(url, allowedOrigins);
   const { chromium } = await import("playwright");
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  // PHASE 4 (§30 multi-viewport) : extension additive — `viewport` optionnel,
+  // comportement de PHASE 3 inchangé si omis (viewport par défaut de
+  // Playwright). Jamais une réécriture du Browser Agent existant.
+  const page = await browser.newPage(viewport ? { viewport } : {});
 
   const consoleMessages: Array<{ type: string; text: string }> = [];
   page.on("console", (msg: ConsoleMessage) => consoleMessages.push({ type: msg.type(), text: msg.text() }));

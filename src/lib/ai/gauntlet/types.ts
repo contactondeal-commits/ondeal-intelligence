@@ -27,7 +27,18 @@ export type GauntletCategory =
   | "test_repair"
   | "browser_navigation"
   | "visual_review"
-  | "visual_fix";
+  | "visual_fix"
+  // PHASE 4 (§78) — catégories introduites par le Supervisor / Storefront
+  // Intelligence Engine, toutes exemplifiées par la première mission RÉELLE
+  // (cmtplqkw200007des7ajp1u7p, 06/09/2026), jamais ajoutées à vide :
+  | "dynamic_decomposition"
+  | "brand_reasoning"
+  | "cro_hypothesis"
+  | "accessibility_measurement"
+  | "multi_strategy_synthesis"
+  | "adversarial_self_critique"
+  | "independent_verdict"
+  | "candidate_comparison";
 
 export interface GauntletTask {
   id: string;

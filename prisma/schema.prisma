@@ -859,3 +859,92 @@ model CoderMissionArtifact {
   @@index([missionId])
   @@map("coder_mission_artifacts")
 }
+
+// ============================================================================
+// ONDEAL AI CORE — PHASE 4 : Storefront Intelligence Engine (06/09/2026).
+//
+// Différence structurelle avec CoderMission (Phase 3) : une CoderMission
+// exécute un plan LINÉAIRE fixe (tableau de steps, index 0..N) — adapté à
+// UNE tâche de code bornée. Une StorefrontMission raisonne sur un objectif
+// de TRÈS HAUT NIVEAU dont la décomposition n'est PAS connue à l'avance
+// (§5 : "Représenter la mission comme un graphe persistant... doit pouvoir
+// évoluer pendant la mission") — d'où un GRAPHE de nodes avec dépendances
+// explicites (dependsOnJson, tableau de `key` de nodes), jamais un index
+// linéaire. Le Supervisor peut ajouter de nouveaux nodes en cours de
+// mission (réplanification réelle — jamais un plan figé au démarrage).
+//
+// Toujours PLATEFORME uniquement (jamais storeId, même précédent que
+// CoderMission/ModelEvalRun) — SYSTEM_CODER gate déjà en place couvre
+// aussi ce nouveau type de mission (aucune nouvelle capacité nécessaire :
+// le Supervisor invoque le Coder Agent existant pour toute modification
+// de code, jamais une voie d'écriture parallèle).
+// ============================================================================
+
+model StorefrontMission {
+  id              String    @id @default(cuid())
+  goal            String // intention de très haut niveau, langage naturel — jamais réécrite après création
+  constraintsJson String? // contraintes/préférences optionnelles fournies par l'owner (budget, ton de marque, etc.)
+  status          JobStatus @default(QUEUED) // PLANNING = le Supervisor construit/étend le graphe ; RUNNING = des nodes s'exécutent
+  cancelRequested Boolean   @default(false)
+  createdByUserId String // PLATFORM OWNER uniquement, jamais null — même garde que CoderMission
+  worldStateJson  String? // dernier WorldState construit (snapshot réel, avec provenance — voir src/lib/ai/supervisor/worldState.ts), jamais réécrit silencieusement : chaque reconstruction est un nouveau node "discover_world_state"
+  resultJson      String? // rapport final structuré (§76) une fois SUCCEEDED : candidates, selection reason, judge verdict, coûts, limitations connues
+  lastError       String?
+  totalCostUsd    Float? // somme réelle des coûts de nodes — jamais estimée globalement, recalculée depuis les nodes
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  startedAt       DateTime?
+  finishedAt      DateTime?
+
+  nodes     StorefrontMissionNode[]
+  artifacts StorefrontMissionArtifact[]
+
+  @@index([status, createdAt])
+  @@map("storefront_missions")
+}
+
+model StorefrontMissionNode {
+  id          String        @id @default(cuid())
+  missionId   String
+  key         String // identifiant stable du node au sein de la mission (ex. "commerce_analyst", "direction_b_critic") — jamais réutilisé pour un autre rôle une fois créé
+  role        String // rôle du spécialiste ou de l'étape mécanique invoquée — libre, jamais un enum figé (même principe que CoderMissionStep.name) : le catalogue de spécialistes (§6) n'est PAS fermé
+  dependsOnJson String? // tableau JSON des `key` de nodes requis SUCCEEDED (ou SKIPPED — branche élaguée) avant exécution ; [] ou null = exécutable dès que la mission tourne
+  status      JobStepStatus @default(PENDING) // PENDING → RUNNING → SUCCEEDED/FAILED ; SKIPPED = branche PRUNE par le Supervisor (§11), jamais supprimée (traçabilité)
+  attempt     Int           @default(1) // nouvelle ligne par retry (même principe que CoderMissionStep.attempt), jamais une réécriture
+  inputJson   String? // contrat Specialist reçu (§7) : objective, context, allowed tools, budget, expected schema
+  outputJson  String? // sortie structurée retournée : findings, evidence, uncertainties, recommendations, confidence, artifacts (§7)
+  confidence  Float? // 0-1, auto-rapportée par le spécialiste — jamais une certitude fabriquée quand la donnée manque (§15)
+  errorJson   String?
+  provider    String?
+  model       String?
+  costUsd     Float?
+  tokensIn    Int?
+  tokensOut   Int?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  heartbeatAt DateTime? // même principe que CoderMissionStep.heartbeatAt (détection de node "stale")
+  createdAt   DateTime      @default(now())
+
+  mission   StorefrontMission           @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  artifacts StorefrontMissionArtifact[]
+
+  @@unique([missionId, key])
+  @@index([missionId, status])
+  @@map("storefront_mission_nodes")
+}
+
+model StorefrontMissionArtifact {
+  id         String          @id @default(cuid())
+  missionId  String
+  nodeId     String?
+  kind       JobArtifactKind // SCREENSHOT | DIFF | LOG | FILE | OTHER — même enum réutilisé, aucun nouveau
+  storageRef String // chemin réel sur disque — jamais le contenu en base
+  metaJson   String?
+  createdAt  DateTime        @default(now())
+
+  mission StorefrontMission     @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  node    StorefrontMissionNode? @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+
+  @@index([missionId])
+  @@map("storefront_mission_artifacts")
+}
