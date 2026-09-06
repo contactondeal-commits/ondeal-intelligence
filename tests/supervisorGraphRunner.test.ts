@@ -50,6 +50,15 @@ const fake = vi.hoisted(() => ({
   // (exception non interceptée pendant la planification, avant le premier
   // node persisté).
   planShouldThrowMessage: null as string | null,
+  // CORRECTIF (06/09/2026, 4e panne réelle — troncature du JSON du planner
+  // AVANT "data.nodes" à cause d'un findings/evidence trop verbeux et d'un
+  // budget de tokens insuffisant) : capture les VRAIS arguments reçus par
+  // callStructuredSpecialist pour verrouiller à la fois le budget de tokens
+  // réellement envoyé et la présence de la contrainte de brièveté dans le
+  // prompt réel — jamais une assertion sur une copie du prompt maintenue à
+  // la main dans le test (qui pourrait diverger silencieusement du code réel).
+  lastPlanCall: null as { system: string; maxTokens: number | undefined } | null,
+  pendingInstruction: null as string | null,
   reset() {
     this.nodes = [];
     this.mission = { id: "mission1", goal: "Refonte candidate premium de /login", cancelRequested: false, worldStateJson: null };
@@ -58,6 +67,8 @@ const fake = vi.hoisted(() => ({
     this.resultJson = null;
     this.nextId = 1;
     this.planShouldThrowMessage = null;
+    this.lastPlanCall = null;
+    this.pendingInstruction = null;
     this.executorImpl = {
       brand_strategist: async () => ({ output: ok({ note: "brand ok" }) }),
       ux_architect: async () => ({ output: ok({ note: "ux ok" }) }),
@@ -142,10 +153,18 @@ vi.mock("@/lib/ai/supervisor/graphStore", () => ({
   },
   isCancelRequested: async () => fake.mission.cancelRequested,
   nodeHeartbeatStale: () => false,
-  // §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026) : jamais d'instruction
-  // en attente dans ces tests (aucun test de ce fichier n'exerce ce chemin
-  // — voir supervisorInstruction.test.ts pour la couverture dédiée).
-  consumePendingInstruction: async () => null,
+  // §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026) : null par défaut
+  // (aucun test de ce fichier n'exerçait ce chemin auparavant — voir
+  // supervisorInstruction.test.ts pour la couverture dédiée de
+  // consumePendingInstruction lui-même) ; piloté par fake.pendingInstruction
+  // pour le test de régression "budget de tokens du replan d'instruction"
+  // ci-dessous (4e panne production 06/09/2026), atomique comme le vrai
+  // (lue puis effacée), jamais retraitée deux fois.
+  consumePendingInstruction: async () => {
+    const instr = fake.pendingInstruction;
+    fake.pendingInstruction = null;
+    return instr;
+  },
   submitPendingInstruction: vi.fn(),
 }));
 
@@ -181,7 +200,15 @@ vi.mock("@/lib/ai/supervisor/specialists", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ai/supervisor/specialists")>();
   return {
     ...actual,
-    callStructuredSpecialist: async () => {
+    callStructuredSpecialist: async (
+      _provider: unknown,
+      _taskSet: unknown,
+      system: string,
+      _userMessage: string,
+      _schema: unknown,
+      maxTokens: number | undefined,
+    ) => {
+      fake.lastPlanCall = { system, maxTokens };
       if (fake.planShouldThrowMessage) {
         throw new Error(fake.planShouldThrowMessage);
       }
@@ -369,5 +396,59 @@ describe("runStorefrontMission — une exception fatale pendant la planification
   it("ne jette jamais l'exception vers l'appelant (contrat GraphRunnerOutcome respecté même en cas d'erreur totalement inattendue)", async () => {
     fake.planShouldThrowMessage = "Panne totalement inattendue simulée (ex. future régression non encore identifiée).";
     await expect(runStorefrontMission("mission1", baseDeps)).resolves.toMatchObject({ status: "FAILED", missionId: "mission1" });
+  });
+});
+
+/**
+ * RÉGRESSION — 4e panne réelle de la même chaîne (06/09/2026), observée EN
+ * PRODUCTION une fois le correctif d'enveloppe (e822a8f) ET le correctif
+ * fence/max_tokens=4000 (087c9ea) déployés : la mission retombait ENCORE en
+ * FAILED, "Graphe (0 nodes)", avec le même message "pas un JSON valide" —
+ * mais cette fois la troncature réelle observée se produisait EN PLEIN
+ * MILIEU du tableau "evidence" (avant même "data"), preuve que le modèle
+ * traitait findings/evidence comme une synthèse narrative complète du World
+ * State plutôt qu'un résumé bref, épuisant le budget de tokens avant
+ * d'atteindre la seule partie réellement exploitée par le code
+ * ("data.nodes"). Verrouille les DEUX volets du correctif réel — jamais un
+ * seul, l'un sans l'autre n'aurait suffi :
+ *   1. Le budget de tokens envoyé au modèle est réellement remonté (8000
+ *      pour le plan initial, 4000 pour un replan d'instruction) — jamais
+ *      resté au 4000/2500 déjà insuffisant.
+ *   2. Le prompt système envoyé au modèle contient RÉELLEMENT une consigne
+ *      de brièveté explicite pour findings/evidence — jamais seulement
+ *      documentée en commentaire sans jamais atteindre le modèle.
+ */
+describe("planInitialGraph/planNodesForInstruction — budget de tokens et brièveté réellement envoyés au modèle (régression 4e panne production 06/09/2026)", () => {
+  it("le plan initial envoie réellement maxTokens=8000 (jamais le 4000 déjà insuffisant en production) ET un prompt système imposant la brièveté de findings/evidence", async () => {
+    await runStorefrontMission("mission1", baseDeps);
+
+    expect(fake.lastPlanCall).not.toBeNull();
+    expect(fake.lastPlanCall!.maxTokens).toBe(8000);
+    // La contrainte doit RÉELLEMENT atteindre le modèle (dans le system
+    // prompt réel construit par planInitialGraph), pas seulement exister en
+    // commentaire dans le code — sinon le bug de production resterait
+    // invisible aux tests, exactement comme le mismatch d'enveloppe original.
+    expect(fake.lastPlanCall!.system).toMatch(/BRIÈVETÉ/i);
+    expect(fake.lastPlanCall!.system).toMatch(/AU PLUS 3/);
+    expect(fake.lastPlanCall!.system).toMatch(/data\.nodes/);
+  });
+
+  it("un replan déclenché par une instruction Owner en cours de mission envoie réellement maxTokens=4000 (jamais le 2500 déjà insuffisant) ET la même contrainte de brièveté", async () => {
+    // Une instruction Owner est déjà en attente AVANT même le premier appel
+    // à runStorefrontMission : consumée dès la première itération de la
+    // boucle (juste après le plan initial, §"vérifié à CHAQUE itération" du
+    // code réel), ce qui déclenche planNodesForInstruction — dont l'appel
+    // écrase fake.lastPlanCall en dernier, donc l'assertion ci-dessous porte
+    // bien sur CET appel, jamais sur celui du plan initial qui l'a précédé.
+    fake.pendingInstruction = "Vérifie aussi l'accessibilité clavier de la nouvelle page.";
+
+    await runStorefrontMission("mission1", baseDeps);
+
+    expect(fake.lastPlanCall).not.toBeNull();
+    expect(fake.lastPlanCall!.maxTokens).toBe(4000);
+    expect(fake.lastPlanCall!.system).toMatch(/BRIÈVETÉ/i);
+    expect(fake.lastPlanCall!.system).toMatch(/data\.nodes/);
+    // L'instruction a bien été consommée (jamais retraitée deux fois).
+    expect(fake.pendingInstruction).toBeNull();
   });
 });

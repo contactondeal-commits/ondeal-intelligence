@@ -168,6 +168,22 @@ async function planInitialGraph(
     // la forme que le code va réellement parser — jamais une forme plus
     // simple "pour le modèle" qui diverge du parseur réel.
     `Réponds STRICTEMENT en JSON avec L'ENVELOPPE COMPLÈTE attendue (la même que TOUS les spécialistes d'OnDeal AI) : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{"nodes":[{"key":"...","role":"...","dependsOn":[...],"objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}}. Le tableau "nodes" DOIT être à l'intérieur du champ "data" — JAMAIS à la racine de la réponse. Pour ce rôle de planification : "findings" = ce que tu retiens de l'objectif et du World State qui a guidé la décomposition ; "evidence" = faits précis du World State qui justifient ce découpage ; "uncertainties" = ce qui reste ambigu dans l'objectif (peut être vide) ; "recommendations" = peut être vide ; "confidence" = ta confiance (0 à 1) que ce plan couvre correctement l'objectif.`,
+    // CORRECTIF (06/09/2026, 4e panne réelle de la même chaîne, observée EN
+    // PRODUCTION une fois le correctif d'enveloppe ci-dessus ET le budget de
+    // 4000 tokens déployés) : la troncature ne se produisait PAS dans
+    // "data.nodes" (le plan lui-même) — elle se produisait EN PLEIN MILIEU du
+    // tableau "evidence", avant même que le modèle atteigne "data". Le modèle
+    // traitait "findings"/"evidence" comme une synthèse narrative complète du
+    // World State (paragraphes entiers, objets evidence détaillés avec
+    // claim/source/precision), consommant l'essentiel du budget de tokens
+    // AVANT de produire la seule partie réellement exploitée par le code
+    // (planSchema ne valide QUE "data.nodes" — voir plus bas). Augmenter
+    // encore le budget seul ne suffit pas si le modèle reste proportionnellement
+    // aussi verbeux ; la contrainte de brièveté ci-dessous fixe la cause
+    // réelle (le PROMPT n'exigeait aucune limite de longueur), le budget
+    // relevé (voir maxTokens de l'appel plus bas) reste une marge de
+    // sécurité, jamais un pansement isolé.
+    `IMPÉRATIF DE BRIÈVETÉ (cause réelle d'une troncature de production précédente) : "findings" = AU PLUS 3 phrases courtes (une ligne chacune, jamais un paragraphe). "evidence" = AU PLUS 3 éléments courts (une ligne chacun — pas d'objet détaillé avec justification longue). "uncertainties"/"recommendations" = 0 à 2 éléments courts, ou tableau vide. Le contenu qui compte réellement pour l'exécution de la mission est "data.nodes" — ne JAMAIS laisser "findings"/"evidence" consommer le budget de sortie au détriment d'un plan de nodes complet et correctement fermé en JSON.`,
   ].join("\n");
   // §57-60 "Persistent Memory" (06/09/2026) : rappel RÉEL des échecs et
   // succès passés pertinents (filtre mécanique par mots-clés du goal — voir
@@ -195,10 +211,16 @@ async function planInitialGraph(
   // uncertainties/recommendations EN PLUS d'un plan pouvant compter jusqu'à
   // 20 nodes (planSchema.max(20)) — largement suffisant pour tronquer la
   // réponse avant la fin du JSON, provoquant "pas un JSON valide" (voir
-  // extractJson, specialists.ts). Porté à 4000, cohérent avec les autres
-  // rôles structurés du catalogue (catalogue.ts : 2500-3000 pour des
-  // sorties bien plus petites qu'un plan de 20 nodes).
-  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, planSchema, 4000);
+  // extractJson, specialists.ts). Porté une première fois à 4000 — ENCORE
+  // insuffisant en production (4e panne réelle, §IMPÉRATIF DE BRIÈVETÉ
+  // ci-dessus) car le modèle épuisait le budget dans "findings"/"evidence"
+  // avant même d'atteindre "data.nodes". Reporté à 8000 (marge de sécurité,
+  // largement sous la limite officielle de sortie de claude-haiku-4-5 —
+  // 64 000 tokens, cf. platform.claude.com/docs/en/models/haiku-4-5/overview
+  // vérifié le 06/09/2026, RÈGLE §57 jamais un chiffre deviné) EN PLUS de la
+  // contrainte de brièveté du prompt — les deux corrigent des causes
+  // distinctes, ni l'un ni l'autre seul n'aurait suffi.
+  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, planSchema, 8000);
   return { nodes: called.output.data.nodes, costUsd: called.costUsd ?? null, provider: called.provider, model: called.model };
 }
 
@@ -232,6 +254,11 @@ async function planNodesForInstruction(
     // Même correctif que planInitialGraph ci-dessus : callStructuredSpecialist
     // exige TOUJOURS l'enveloppe complète, jamais {"nodes":[...]} nu.
     `Réponds STRICTEMENT en JSON avec L'ENVELOPPE COMPLÈTE attendue (la même que TOUS les spécialistes d'OnDeal AI) : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{"nodes":[{"key":"...","role":"...","objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}}. Le tableau "nodes" DOIT être à l'intérieur du champ "data" — JAMAIS à la racine. "findings"/"evidence"/"uncertainties"/"recommendations" peuvent être vides ; "confidence" = ta confiance (0 à 1) que ces nodes supplémentaires couvrent correctement l'instruction.`,
+    // Même correctif de brièveté que planInitialGraph ci-dessus (4e panne
+    // réelle de production, §IMPÉRATIF DE BRIÈVETÉ) : même risque de
+    // troncature avant "data.nodes" si le modèle traite findings/evidence
+    // comme une synthèse narrative complète plutôt qu'un résumé bref.
+    `IMPÉRATIF DE BRIÈVETÉ (même cause racine que le plan initial) : "findings" = AU PLUS 3 phrases courtes. "evidence" = AU PLUS 3 éléments courts. "uncertainties"/"recommendations" = 0 à 2 éléments courts. "data.nodes" est la seule partie réellement exploitée par le code — ne jamais la sacrifier à une prose longue dans findings/evidence.`,
   ].join("\n");
   const userMessage = [
     `OBJECTIF GLOBAL DE LA MISSION : ${goal}`,
@@ -240,9 +267,12 @@ async function planNodesForInstruction(
   ].join("\n\n");
   // Même correctif de budget que planInitialGraph ci-dessus (enveloppe
   // complète désormais obligatoire) — plus petit ici (max 10 nodes,
-  // §instructionPlanSchema) mais 1200 restait trop juste pour
-  // findings/evidence/uncertainties/recommendations en plus des nodes.
-  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, instructionPlanSchema, 2500);
+  // §instructionPlanSchema) mais 1200 puis 2500 restaient trop justes pour
+  // findings/evidence/uncertainties/recommendations en plus des nodes (même
+  // 4e panne réelle que planInitialGraph). Reporté à 4000, avec la même
+  // marge de sécurité que planInitialGraph — largement sous la limite
+  // officielle de sortie du modèle (64 000 tokens).
+  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, instructionPlanSchema, 4000);
   return { nodes: called.output.data.nodes.map(({ key, role, objective, previewPath, pageDescription, dataQuery }) => ({ key, role, objective, previewPath, pageDescription, dataQuery })), costUsd: called.costUsd ?? null };
 }
 
