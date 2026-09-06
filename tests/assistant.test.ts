@@ -90,3 +90,46 @@ describe("current_product_summary — jamais un fait inventé, un repli honnête
     expect(res.answer).not.toMatch(/vs la période précédente/);
   });
 });
+
+describe("intentions « comment faire » (correctif 05/09/2026 v4 — aide opérationnelle exacte, jamais confiée au LLM)", () => {
+  it("« comment archiver un produit ? » matche how_to_archive_or_delete_product et pointe vers la fiche produit", async () => {
+    const intent = matchIntent("Comment archiver un produit ?");
+    expect(intent?.key).toBe("how_to_archive_or_delete_product");
+    const res = await answerQuestion("Comment archiver un produit ?", BASE_CTX);
+    expect(res.answer).toMatch(/Product Intelligence/);
+    expect(res.answer).toMatch(/Shopify/);
+  });
+
+  it("« comment supprimer un produit ? » dit honnêtement que ce n'est pas encore possible depuis OnDeal", async () => {
+    const res = await answerQuestion("Je veux supprimer un produit de mon catalogue", BASE_CTX);
+    expect(res.matchedIntent).toBe("how_to_archive_or_delete_product");
+    expect(res.answer).toMatch(/PAS.*disponible depuis OnDeal|pas encore disponible/i);
+    expect(res.answer).toMatch(/Shopify/);
+  });
+
+  it("« comment modifier le stock ? » matche how_to_edit_stock", () => {
+    const intent = matchIntent("Comment modifier le stock d'un produit ?");
+    expect(intent?.key).toBe("how_to_edit_stock");
+  });
+
+  it("« comment connecter Google Analytics ? » matche how_to_connect_integration", () => {
+    const intent = matchIntent("Comment connecter Google Analytics ?");
+    expect(intent?.key).toBe("how_to_connect_integration");
+  });
+});
+
+describe("repli ouvert (correctif 05/09/2026 v4) — jamais le même message générique en boucle, jamais sans IA configurée", () => {
+  it("sans ANTHROPIC_API_KEY, une question hors thématiques connues reçoit un message honnête listant les thématiques garanties (pas une simple répétition figée)", async () => {
+    const originalKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const res = await answerQuestion("Quelle est la météo à Paris ?", BASE_CTX);
+      expect(res.matchedIntent).toBeNull();
+      expect(res.generatedBy).toBe("rules");
+      expect(res.answer).toMatch(/priorités du jour/);
+      expect(res.answer).toMatch(/archiver/);
+    } finally {
+      if (originalKey !== undefined) process.env.ANTHROPIC_API_KEY = originalKey;
+    }
+  });
+});
