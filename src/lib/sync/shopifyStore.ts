@@ -21,6 +21,17 @@ import { resolveCostInputs } from "@/lib/intelligence/costs";
 export interface ProductStoreStats {
   productsRead: number;
   productsStored: number;
+  /**
+   * FINAL PHASE — Merchant Plane entitlements (06/09/2026) : nouveaux
+   * produits refusés parce que la boutique a déjà atteint PlanLimit.maxProducts
+   * pour son plan. Un produit DÉJÀ synchronisé continue toujours d'être mis à
+   * jour (jamais bloqué : la limite protège la CROISSANCE du catalogue, pas
+   * les données déjà acquises) — seule la CRÉATION d'un produit au-delà du
+   * quota est refusée. Jusqu'ici PlanLimit.maxProducts était modélisé et
+   * AFFICHÉ (Settings, AppShell) mais jamais réellement appliqué au moment de
+   * l'écriture : un dépassement de plan ne changeait concrètement rien.
+   */
+  productsBlockedByPlanLimit: number;
   variantsRead: number;
   variantsStored: number;
   variantsRejected: number;
@@ -44,6 +55,7 @@ export async function storeProducts(
   const stats: ProductStoreStats = {
     productsRead: products.length,
     productsStored: 0,
+    productsBlockedByPlanLimit: 0,
     variantsRead: 0,
     variantsStored: 0,
     variantsRejected: 0,
@@ -59,7 +71,34 @@ export async function storeProducts(
     if (issues.length < ISSUE_SAMPLE_MAX) issues.push(issue);
   };
 
+  // Entitlement réel PlanLimit.maxProducts (voir doc de ProductStoreStats
+  // ci-dessus) : la limite est PAR BOUTIQUE (même périmètre que l'affichage
+  // Settings/AppShell existant, jamais total organisation). Un seul aller-
+  // retour ici — jamais une requête `count` par produit de la boucle — pour
+  // connaître à la fois le quota restant et l'ensemble des produits déjà
+  // connus (une mise à jour ne consomme jamais le quota, seule une création
+  // le fait).
+  const [storeOrg, existingProducts] = await Promise.all([
+    prisma.store.findUnique({ where: { id: storeId }, select: { organization: { select: { plan: true } } } }),
+    prisma.product.findMany({ where: { storeId }, select: { shopifyProductId: true } }),
+  ]);
+  const planLimit = storeOrg ? await prisma.planLimit.findUnique({ where: { plan: storeOrg.organization.plan } }) : null;
+  const existingProductIds = new Set(existingProducts.map((p) => p.shopifyProductId));
+  let remainingProductQuota = planLimit ? Math.max(0, planLimit.maxProducts - existingProductIds.size) : Infinity;
+
   for (const p of products) {
+    const isNewProduct = !existingProductIds.has(p.id);
+    if (isNewProduct && remainingProductQuota <= 0) {
+      stats.productsBlockedByPlanLimit += 1;
+      pushIssue({
+        field: "product",
+        problem: "plan_limit_exceeded",
+        original: p.id,
+        corrected: null,
+      });
+      continue; // ni le produit ni ses variantes ne sont écrits — jamais un upsert partiel au-delà du quota
+    }
+
     const { handle, issue: handleIssue } = normalizeHandle(p.handle, p.id);
     if (handleIssue) pushIssue(handleIssue);
 
@@ -87,6 +126,7 @@ export async function storeProducts(
       select: { id: true },
     });
     stats.productsStored += 1;
+    if (isNewProduct) remainingProductQuota -= 1;
 
     const variantOps = [];
     for (const rawVariant of p.variants.nodes) {

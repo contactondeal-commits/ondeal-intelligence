@@ -105,7 +105,12 @@ export async function syncShopify(storeId: string, triggeredBy: "manual" | "sche
     // stockée telle quelle mais incohérente (prix barré ≤ prix…). Les deux
     // sont tracés, seuls les premiers dégradent le statut du SyncRun.
     const qualityWarnings = Object.values(productStats.issueCountsByProblem).reduce((s, n) => s + n, 0);
-    const hardErrors = productStats.variantsRejected + (stats.ordersError ? 1 : 0);
+    // FINAL PHASE — Merchant Plane entitlements (06/09/2026) : un produit
+    // refusé par PlanLimit.maxProducts est une VRAIE erreur (donnée non
+    // stockée, exactement comme une variante rejetée), jamais un simple
+    // signalement qualité — sinon un dépassement de plan degraderait
+    // silencieusement le statut du SyncRun sans jamais alerter personne.
+    const hardErrors = productStats.variantsRejected + productStats.productsBlockedByPlanLimit + (stats.ordersError ? 1 : 0);
     stats.qualityWarnings = qualityWarnings;
     stats.hardErrors = hardErrors;
     await prisma.syncRun.update({
@@ -125,8 +130,12 @@ export async function syncShopify(storeId: string, triggeredBy: "manual" | "sche
       storeId,
       actorType: "system",
       event: "sync.completed",
-      message: `Synchronisation Shopify : ${itemsStored}/${itemsFetched} produits, ${productStats.variantsStored} variantes (${productStats.variantsWithUnitCost} avec coût unitaire Shopify), ${hardErrors} erreur(s), ${qualityWarnings} signalement(s) qualité.`,
-      meta: { itemsFetched, itemsStored, hardErrors, qualityWarnings },
+      message:
+        `Synchronisation Shopify : ${itemsStored}/${itemsFetched} produits, ${productStats.variantsStored} variantes (${productStats.variantsWithUnitCost} avec coût unitaire Shopify), ${hardErrors} erreur(s), ${qualityWarnings} signalement(s) qualité.` +
+        (productStats.productsBlockedByPlanLimit > 0
+          ? ` ${productStats.productsBlockedByPlanLimit} nouveau(x) produit(s) NON synchronisé(s) : quota du plan atteint.`
+          : ""),
+      meta: { itemsFetched, itemsStored, hardErrors, qualityWarnings, productsBlockedByPlanLimit: productStats.productsBlockedByPlanLimit },
     });
 
     // ANALYZE → INSIGHTS
@@ -222,7 +231,7 @@ async function runCatalogSync<C>(
     await prisma.integration.update({ where: { id: integration.id }, data: { lastSyncedAt: new Date(), lastError: null } });
 
     const qualityWarnings = Object.values(productStats.issueCountsByProblem).reduce((s, n) => s + n, 0);
-    const hardErrors = productStats.variantsRejected + (stats.ordersError ? 1 : 0);
+    const hardErrors = productStats.variantsRejected + productStats.productsBlockedByPlanLimit + (stats.ordersError ? 1 : 0);
     stats.qualityWarnings = qualityWarnings;
     stats.hardErrors = hardErrors;
     await prisma.syncRun.update({
@@ -242,8 +251,12 @@ async function runCatalogSync<C>(
       storeId,
       actorType: "system",
       event: "sync.completed",
-      message: `Synchronisation ${providerLabel} : ${itemsStored}/${itemsFetched} produits, ${productStats.variantsStored} variantes (${productStats.variantsWithUnitCost} avec coût unitaire), ${hardErrors} erreur(s), ${qualityWarnings} signalement(s) qualité.`,
-      meta: { itemsFetched, itemsStored, hardErrors, qualityWarnings },
+      message:
+        `Synchronisation ${providerLabel} : ${itemsStored}/${itemsFetched} produits, ${productStats.variantsStored} variantes (${productStats.variantsWithUnitCost} avec coût unitaire), ${hardErrors} erreur(s), ${qualityWarnings} signalement(s) qualité.` +
+        (productStats.productsBlockedByPlanLimit > 0
+          ? ` ${productStats.productsBlockedByPlanLimit} nouveau(x) produit(s) NON synchronisé(s) : quota du plan atteint.`
+          : ""),
+      meta: { itemsFetched, itemsStored, hardErrors, qualityWarnings, productsBlockedByPlanLimit: productStats.productsBlockedByPlanLimit },
     });
 
     await recomputeStoreIntelligence(storeId);
