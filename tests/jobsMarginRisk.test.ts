@@ -58,6 +58,13 @@ async function loadMarginRisk(opts: {
       AnthropicProvider: class {
         name = "anthropic";
         generate = opts.generate;
+        // Tarif réel haiku (voir ANTHROPIC_CAPABILITIES) — nécessaire au calcul
+        // de costUsd (PHASE 2, coût observable) fait par le vrai reasonStep.
+        capabilities(model: string) {
+          return model === "claude-haiku-4-5-20251001"
+            ? { maxContextTokens: 200_000, vision: true, toolUse: true, costPerMTokIn: 1, costPerMTokOut: 5 }
+            : null;
+        }
       },
     }));
   }
@@ -175,6 +182,8 @@ describe("reason_margin_risk — MODEL REASONING WHEN NEEDED", () => {
     expect(result.output).toEqual({ recommendations: [{ variantId: "v1", priority: 1, rationale: "Marge très faible." }] });
     expect(result.provider).toBe("anthropic");
     expect(result.tokensIn).toBe(42);
+    // Coût observable (PHASE 2) : 42 tokens in * 1$/MTok + 17 tokens out * 5$/MTok, jamais estimé, jamais forcé à 0.
+    expect(result.costUsd).toBeCloseTo(0.000127, 9);
   });
 });
 
