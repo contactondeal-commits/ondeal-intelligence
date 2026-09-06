@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { resolveCostInputs } from "@/lib/intelligence/costs";
 import { analyzeMargin, type MarginInput } from "@/lib/intelligence/margin";
 import { AnthropicProvider } from "@/lib/ai/providers/anthropic";
+import { estimateCostUsd } from "@/lib/ai/models/cost";
 import type { JobStepDefinition } from "@/lib/ai/jobs/types";
 
 /**
@@ -209,12 +210,18 @@ const reasonStep: JobStepDefinition = {
       throw new Error(`Format de recommandations invalide renvoyé par le modèle : ${validated.error.message}`);
     }
 
+    // Coût observable (PHASE 2, § « coût observable ») : calculé UNIQUEMENT
+    // à partir des tokens réellement rapportés par le provider et du tarif
+    // vérifié dans ANTHROPIC_CAPABILITIES — jamais estimé, jamais forcé à 0.
+    const costUsd = estimateCostUsd(provider, REASON_MODEL, generated.tokensIn, generated.tokensOut);
+
     return {
       output: validated.data,
       provider: provider.name,
       model: REASON_MODEL,
       tokensIn: generated.tokensIn ?? undefined,
       tokensOut: generated.tokensOut ?? undefined,
+      costUsd: costUsd ?? undefined,
     };
   },
 };
