@@ -408,6 +408,41 @@ function MissionsTab({ onError }: { onError: (e: string) => void }) {
     }
   }
 
+  // §12 "SSE temps réel" (06/09/2026) : la mission ouverte se met à jour
+  // toute seule pendant qu'elle tourne — remplace le rafraîchissement
+  // manuel (jusqu'ici, ouvrir une mission RUNNING ne se mettait à jour que
+  // sur Reprendre/Annuler/re-clic). Un seul flux actif à la fois (une
+  // mission ouverte à la fois) ; fermé dès que le statut devient terminal
+  // ou que la mission ouverte change — jamais deux flux qui tournent en
+  // parallèle pour rien.
+  const [liveConnected, setLiveConnected] = useState(false);
+  const streamedMissionId = selected?.mission.id;
+  const streamedMissionStatus = selected?.mission.status;
+  useEffect(() => {
+    if (!streamedMissionId || !streamedMissionStatus || !["PLANNING", "RUNNING", "PAUSED"].includes(streamedMissionStatus)) {
+      setLiveConnected(false);
+      return;
+    }
+    const es = new EventSource(`/api/ai-lab/missions/${streamedMissionId}/stream`);
+    es.addEventListener("open", () => setLiveConnected(true));
+    es.addEventListener("mission", (evt) => {
+      try {
+        setSelected(JSON.parse((evt as MessageEvent).data) as MissionDetail);
+      } catch {
+        // Événement malformé — jamais un crash de l'UI ; on ignore cet événement et on garde le dernier état connu.
+      }
+    });
+    // Une fermeture propre du flux serveur (fin de maxDuration, ou mission
+    // devenue terminale côté serveur) déclenche une reconnexion NATIVE de
+    // EventSource — comportement standard de la spec SSE, pas une erreur à
+    // signaler à l'Owner ; on se contente de refléter l'état de connexion.
+    es.addEventListener("error", () => setLiveConnected(false));
+    return () => {
+      es.close();
+      setLiveConnected(false);
+    };
+  }, [streamedMissionId, streamedMissionStatus]);
+
   async function cancel(id: string) {
     await api(`/api/ai-lab/missions/${id}/cancel`, { method: "POST" }).catch((e) => onError(String(e)));
     if (selected?.mission.id === id) open(id);
@@ -489,6 +524,7 @@ function MissionsTab({ onError }: { onError: (e: string) => void }) {
                 <h3 style={{ margin: 0, fontSize: 15 }}>{selected.mission.goal}</h3>
                 <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
                   <Badge tone={healthTone(selected.mission.status)}>{selected.mission.status}</Badge>
+                  {liveConnected && <Badge tone="ok">● EN DIRECT</Badge>}
                   <span style={{ fontSize: 12, color: "var(--color-text-faint)" }}>
                     Coût : {selected.mission.totalCostUsd != null ? `${selected.mission.totalCostUsd.toFixed(4)} USD` : "—"}
                   </span>
