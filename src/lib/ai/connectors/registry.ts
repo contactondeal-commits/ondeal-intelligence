@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import type { IntegrationProvider } from "@prisma/client";
 import { githubHealthCheck } from "@/lib/ai/connectors/github";
 import { klaviyoHealthCheck } from "@/lib/ai/connectors/klaviyo";
+import { windsorHealthCheck } from "@/lib/ai/connectors/windsor";
 
 /**
  * ONDEAL AI CORE — PHASE 5 : Connector Registry (06/09/2026), §"REALITY RULE".
@@ -197,6 +198,29 @@ const KLAVIYO_CONNECTOR: ConnectorDefinition = {
   hasRealImplementation: true,
 };
 
+// Windsor.ai (06/09/2026, §"Connecteurs restants") : PROMU en connecteur
+// RÉEL — un vrai client API (connectors/windsor.ts) existe désormais, même
+// principe que Klaviyo ci-dessus (WINDSOR_API_KEY, une variable plateforme,
+// jamais un identifiant par boutique). Contrat d'API vérifié par recherche
+// réelle avant écriture (voir windsor.ts pour les sources).
+const WINDSOR_CONNECTOR: ConnectorDefinition = {
+  id: "windsor_ai",
+  name: "Windsor.ai",
+  category: "Analytics",
+  provider: "windsor",
+  authType: "API_KEY",
+  capabilities: ["cross_channel_analytics"],
+  readWriteLevel: "READ_ONLY",
+  riskLevel: "LOW",
+  ownerOnly: false,
+  merchantAvailable: true,
+  costClass: "USAGE_BASED",
+  requiredSecrets: ["WINDSOR_API_KEY"],
+  documentationReference: "src/lib/ai/connectors/windsor.ts",
+  version: "1.0.0",
+  hasRealImplementation: true,
+};
+
 const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
   archOnly({ id: "google_calendar", name: "Google Calendar", category: "Productivity", provider: "google", authType: "OAUTH2", capabilities: ["calendar_read"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
   archOnly({ id: "gmail", name: "Gmail", category: "Productivity", provider: "google", authType: "OAUTH2", capabilities: ["email_read"], readWriteLevel: "READ_ONLY", riskLevel: "MEDIUM", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
@@ -213,7 +237,6 @@ const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
   archOnly({ id: "descript", name: "Descript", category: "Media", provider: "descript", authType: "API_KEY", capabilities: ["media_edit"], readWriteLevel: "READ_WRITE", riskLevel: "MEDIUM", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["DESCRIPT_API_KEY"] }),
   archOnly({ id: "matrixify", name: "Matrixify", category: "Ecommerce", provider: "matrixify", authType: "API_KEY", capabilities: ["bulk_export", "bulk_import"], readWriteLevel: "READ_WRITE", riskLevel: "HIGH", ownerOnly: false, merchantAvailable: true, costClass: "FIXED", requiredSecrets: ["MATRIXIFY_API_KEY"] }),
   archOnly({ id: "supermetrics", name: "Supermetrics", category: "Analytics", provider: "supermetrics", authType: "OAUTH2", capabilities: ["cross_channel_analytics"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["SUPERMETRICS_API_KEY"] }),
-  archOnly({ id: "windsor_ai", name: "Windsor.ai", category: "Analytics", provider: "windsor", authType: "API_KEY", capabilities: ["cross_channel_analytics"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["WINDSOR_API_KEY"] }),
   archOnly({ id: "zoho_desk", name: "Zoho Desk", category: "Support", provider: "zoho", authType: "OAUTH2", capabilities: ["tickets_read"], readWriteLevel: "READ_ONLY", riskLevel: "MEDIUM", ownerOnly: false, merchantAvailable: true, costClass: "FREE", requiredSecrets: ["ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET"] }),
   archOnly({ id: "google_search_console", name: "Google Search Console", category: "SEO", provider: "google", authType: "OAUTH2", capabilities: ["search_performance_read"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: false, merchantAvailable: true, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
   archOnly({ id: "google_merchant_center", name: "Google Merchant Center", category: "Ecommerce", provider: "google", authType: "OAUTH2", capabilities: ["product_feed_read"], readWriteLevel: "READ_ONLY", riskLevel: "MEDIUM", ownerOnly: false, merchantAvailable: true, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
@@ -227,7 +250,7 @@ const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
   archOnly({ id: "browser_agent", name: "Browser / Agentic Access", category: "Automation", provider: "ondeal_browser_agent", authType: "NONE", capabilities: ["browser_navigate", "browser_screenshot"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: [] }),
 ];
 
-export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [...REAL_CONNECTORS, GITHUB_CONNECTOR, KLAVIYO_CONNECTOR, ...ARCHITECTURE_ONLY_CONNECTORS];
+export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [...REAL_CONNECTORS, GITHUB_CONNECTOR, KLAVIYO_CONNECTOR, WINDSOR_CONNECTOR, ...ARCHITECTURE_ONLY_CONNECTORS];
 
 export function getConnectorDefinition(id: string): ConnectorDefinition | undefined {
   return CONNECTOR_REGISTRY.find((c) => c.id === id);
@@ -262,6 +285,12 @@ export async function getConnectorHealth(id: string, ctx?: { storeId?: string })
 
   if (id === "klaviyo") {
     const health = await klaviyoHealthCheck();
+    const map: Record<typeof health.status, ConnectorStatus> = { AVAILABLE: "CONNECTED", DISABLED: "NOT_CONFIGURED", ERROR: "ERROR", RATE_LIMITED: "DEGRADED" };
+    return { status: map[health.status], detail: health.detail, lastSuccessfulCall: health.status === "AVAILABLE" ? new Date().toISOString() : null, lastSync: null };
+  }
+
+  if (id === "windsor_ai") {
+    const health = await windsorHealthCheck();
     const map: Record<typeof health.status, ConnectorStatus> = { AVAILABLE: "CONNECTED", DISABLED: "NOT_CONFIGURED", ERROR: "ERROR", RATE_LIMITED: "DEGRADED" };
     return { status: map[health.status], detail: health.detail, lastSuccessfulCall: health.status === "AVAILABLE" ? new Date().toISOString() : null, lastSync: null };
   }

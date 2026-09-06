@@ -21,6 +21,7 @@ afterEach(() => {
 async function loadRegistry(klaviyoHealthCheck: ReturnType<typeof vi.fn>) {
   vi.resetModules();
   vi.doMock("@/lib/ai/connectors/klaviyo", () => ({ klaviyoHealthCheck }));
+  vi.doMock("@/lib/ai/connectors/windsor", () => ({ windsorHealthCheck: vi.fn().mockResolvedValue({ status: "DISABLED", detail: "x" }) }));
   vi.doMock("@/lib/ai/connectors/github", () => ({ githubHealthCheck: vi.fn().mockResolvedValue({ status: "NOT_CONNECTED", detail: "x", repoFullName: null, scopes: null, lastHealthCheckAt: null }) }));
   return import("@/lib/ai/connectors/registry");
 }
