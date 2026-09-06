@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
 
@@ -24,21 +24,25 @@ export default function OwnerAuthPage() {
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [recoveryForm, setRecoveryForm] = useState({ email: "", password: "", code: "" });
 
-  const checkState = useCallback(async () => {
+  useEffect(() => {
     // Aucune route dédiée "ai-je déjà une clé" — on tente directement une
     // option d'authentification ; une erreur explicite ("aucune clé
     // enregistrée") signifie qu'il faut s'enregistrer d'abord.
-    const res = await fetch("/api/owner/webauthn/login/options", { method: "POST" });
-    if (res.ok) {
-      setMode("NEEDS_LOGIN");
-    } else {
-      setMode("NEEDS_REGISTRATION");
-    }
+    // Effet de récupération au montage inliné (jamais un callback nommé
+    // rappelé depuis l'effet) : le seul motif que
+    // react-hooks/set-state-in-effect n'assimile pas à un setState
+    // synchrone en cascade, et protégé par `active` contre un setState
+    // après démontage si le composant disparaît avant la réponse réseau.
+    let active = true;
+    (async () => {
+      const res = await fetch("/api/owner/webauthn/login/options", { method: "POST" });
+      if (!active) return;
+      setMode(res.ok ? "NEEDS_LOGIN" : "NEEDS_REGISTRATION");
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
-
-  useEffect(() => {
-    checkState();
-  }, [checkState]);
 
   async function onRegister() {
     setBusy(true);
