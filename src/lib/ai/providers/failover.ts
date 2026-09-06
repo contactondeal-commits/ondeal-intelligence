@@ -157,7 +157,21 @@ function candidateSupportsRequest(candidate: FailoverCandidate, req: GenerateReq
 
 export class AllCandidatesFailedError extends Error {
   constructor(public attempts: Array<{ provider: string; model: string; failureCategory: FailureCategory; message: string }>) {
-    super(`Tous les candidats provider/modèle ont échoué (${attempts.length} tentative(s)) : ${attempts.map((a) => `${a.provider}/${a.model}→${a.failureCategory}`).join(", ")}`);
+    // CORRECTIF (06/09/2026, suite du bug de production
+    // "cmtq415440000l204rqiey6j8") : le message n'incluait auparavant QUE la
+    // catégorie coarse (ex. "anthropic/claude-haiku-4-5→PROVIDER_DOWN"),
+    // jamais le message brut sous-jacent (déjà capturé dans
+    // `attempts[].message` mais jeté au sol ici) — PROVIDER_DOWN à lui seul
+    // couvre plusieurs causes très différentes (clé API absente, panne
+    // réseau réelle, 5xx transitoire côté provider) qu'on ne peut PAS
+    // distinguer sans le texte réel. Ce message brut est maintenant persisté
+    // jusque dans Mission.lastError (via markMissionFailed) — jamais une
+    // catégorie seule qui oblige à deviner la cause réelle après coup.
+    super(
+      `Tous les candidats provider/modèle ont échoué (${attempts.length} tentative(s)) : ${attempts
+        .map((a) => `${a.provider}/${a.model}→${a.failureCategory} (${a.message})`)
+        .join(" | ")}`,
+    );
     this.name = "AllCandidatesFailedError";
   }
 }

@@ -113,4 +113,26 @@ describe("FailoverProvider — continuité réelle multi-provider", () => {
     const fp = new FailoverProvider([{ provider: a, model: "m1" }, { provider: b, model: "m2" }]);
     await expect(fp.generate({ model: "ignored", system: "s", userMessage: "u", maxTokens: 100 })).rejects.toThrow(AllCandidatesFailedError);
   });
+
+  // CORRECTIF (06/09/2026, suite du bug de production "provider/model
+  // réellement sélectionné" → PROVIDER_DOWN sans cause exploitable) : le
+  // message de AllCandidatesFailedError doit contenir le message BRUT de
+  // CHAQUE tentative, jamais seulement la catégorie coarse — sinon
+  // "PROVIDER_DOWN" seul ne permet pas de distinguer une clé API absente
+  // d'une vraie panne réseau ou d'un 5xx transitoire côté provider.
+  it("inclut le message BRUT de chaque tentative (pas seulement la catégorie) — une cause exploitable, jamais une catégorie seule à deviner", async () => {
+    const a = fakeProvider("anthropic", TEXT_CAPS, async () => {
+      throw new Error("ANTHROPIC_API_KEY absent — aucun appel modèle possible.");
+    });
+    const fp = new FailoverProvider([{ provider: a, model: "claude-haiku-4-5-20251001" }]);
+    try {
+      await fp.generate({ model: "ignored", system: "s", userMessage: "u", maxTokens: 100 });
+      expect.unreachable("devait lever AllCandidatesFailedError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AllCandidatesFailedError);
+      const message = (err as Error).message;
+      expect(message).toContain("PROVIDER_DOWN");
+      expect(message).toContain("ANTHROPIC_API_KEY absent — aucun appel modèle possible.");
+    }
+  });
 });
