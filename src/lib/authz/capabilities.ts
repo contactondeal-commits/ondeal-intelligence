@@ -19,21 +19,29 @@ import { getCurrentUser } from "@/lib/auth";
  *     gouverné ICI, par une identité utilisateur PLATEFORME explicite
  *     (PLATFORM_OWNER_USER_IDS), jamais par un rôle métier, quel qu'il soit.
  *
- * Fondation délibérément MINIMALE : seulement les 2 capacités
- * RÉELLEMENT consommées aujourd'hui (les routes model-evaluations,
- * PHASE 2) — pas une matrice de 20+ capacités spéculatives (voir la
- * commande elle-même : "ne crée pas inutilement 30 permissions
- * aujourd'hui... construis une foundation extensible"). Chaque capacité
- * supplémentaire s'ajoute le jour où un appelant réel en a besoin — même
- * principe que ModelProvider (providers/provider.ts) ou VerificationHook
- * (jobs/types.ts). La matrice Plan/Entitlement (STARTER/PRO/BUSINESS/
- * AGENCY → quelles capacités marchandes) et le Tool Registry
- * (riskLevel/requiredCapabilities par outil/Job type) restent un chantier
- * séparé, explicitement PAS construit ici — voir le rapport de session.
+ * Fondation délibérément MINIMALE : seulement les capacités RÉELLEMENT
+ * consommées par un appelant réel — pas une matrice de 20+ capacités
+ * spéculatives (voir la commande elle-même : "ne crée pas inutilement 30
+ * permissions aujourd'hui... construis une foundation extensible"). Chaque
+ * capacité supplémentaire s'ajoute le jour où un appelant réel en a besoin —
+ * même principe que ModelProvider (providers/provider.ts) ou
+ * VerificationHook (jobs/types.ts). La matrice Plan/Entitlement (STARTER/
+ * PRO/BUSINESS/AGENCY → quelles capacités marchandes) et le Tool Registry
+ * complet (riskLevel/requiredCapabilities par outil/Job type) restent un
+ * chantier séparé, explicitement PAS construit ici — voir le rapport de
+ * session.
+ *
+ * "SYSTEM_CODER" (PHASE 3, 06/09/2026) : gate du Coder Agent (inspection du
+ * dépôt, édition de fichiers, exécution de build/test/browser dans un
+ * workspace isolé). Réservé EXCLUSIVEMENT au propriétaire plateforme —
+ * "SYSTEM CODER = PLATFORM OWNER ONLY" (commande PHASE 3, §13). STORE
+ * OWNER, STORE ADMIN et AGENCY CLIENT ne peuvent PAS invoquer le Coder
+ * Agent système, quel que soit leur rôle Membership — même principe que
+ * AI_MODEL_ADMIN/AI_EVAL_READ, aucune exception.
  */
-export type Capability = "AI_MODEL_ADMIN" | "AI_EVAL_READ";
+export type Capability = "AI_MODEL_ADMIN" | "AI_EVAL_READ" | "SYSTEM_CODER";
 
-const ALL_CONTROL_PLANE_CAPABILITIES: ReadonlySet<Capability> = new Set(["AI_MODEL_ADMIN", "AI_EVAL_READ"]);
+const ALL_CONTROL_PLANE_CAPABILITIES: ReadonlySet<Capability> = new Set(["AI_MODEL_ADMIN", "AI_EVAL_READ", "SYSTEM_CODER"]);
 
 export class CapabilityError extends Error {}
 

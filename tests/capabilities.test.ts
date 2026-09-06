@@ -63,4 +63,25 @@ describe("requireCapability — frontière Control Plane / Merchant Plane", () =
     const { requireCapability, CapabilityError } = await loadCapabilities({ currentUser: anyone });
     await expect(requireCapability("AI_EVAL_READ")).rejects.toBeInstanceOf(CapabilityError);
   });
+
+  it("PHASE 3 — SYSTEM_CODER : refuse un OWNER/ADMIN/AGENCY métier réel, même avec plusieurs organisations, quel que soit leur rôle", async () => {
+    process.env.PLATFORM_OWNER_USER_IDS = "cl_real_platform_owner";
+    const agencyClient = {
+      user: { id: "cl_agency_client", email: "agency@example.com", name: "Agence" },
+      memberships: [
+        { organizationId: "org1", organizationName: "Boutique A", role: "OWNER" },
+        { organizationId: "org2", organizationName: "Boutique B", role: "ADMIN" },
+      ],
+    };
+    const { requireCapability, CapabilityError } = await loadCapabilities({ currentUser: agencyClient });
+    await expect(requireCapability("SYSTEM_CODER")).rejects.toBeInstanceOf(CapabilityError);
+  });
+
+  it("PHASE 3 — SYSTEM_CODER : accordée au propriétaire plateforme, comme toute autre capacité Control Plane (même allowlist)", async () => {
+    process.env.PLATFORM_OWNER_USER_IDS = "cl_real_platform_owner";
+    const platformOwner = { user: { id: "cl_real_platform_owner", email: "gold@ondeal.example", name: "Gold" }, memberships: [] };
+    const { requireCapability } = await loadCapabilities({ currentUser: platformOwner });
+    const result = await requireCapability("SYSTEM_CODER");
+    expect(result.userId).toBe("cl_real_platform_owner");
+  });
 });

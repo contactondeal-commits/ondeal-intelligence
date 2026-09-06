@@ -43,6 +43,27 @@ export class AnthropicProvider implements ModelProvider {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY absent — aucun appel modèle possible.");
 
+    // PHASE 3 : refuse explicitement (jamais un envoi silencieux dégradé en
+    // texte seul) une requête avec images si le modèle ciblé n'a pas
+    // vision:true dans son catalogue de capacités — voir provider.ts.
+    if (req.images && req.images.length > 0) {
+      const caps = this.capabilities(req.model);
+      if (!caps?.vision) {
+        throw new Error(`Le modèle "${req.model}" n'a pas la capacité vision — impossible d'envoyer ${req.images.length} image(s).`);
+      }
+    }
+
+    const userContent =
+      req.images && req.images.length > 0
+        ? [
+            ...req.images.map((img) => ({
+              type: "image",
+              source: { type: "base64", media_type: img.mediaType, data: img.data },
+            })),
+            { type: "text", text: req.userMessage },
+          ]
+        : req.userMessage;
+
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -54,7 +75,7 @@ export class AnthropicProvider implements ModelProvider {
         model: req.model,
         max_tokens: req.maxTokens,
         system: req.system,
-        messages: [{ role: "user", content: req.userMessage }],
+        messages: [{ role: "user", content: userContent }],
         ...(req.webSearch
           ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: req.webSearch.maxUses }] }
           : {}),

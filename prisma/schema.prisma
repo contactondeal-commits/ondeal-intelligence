@@ -771,3 +771,91 @@ model ModelEvalResult {
   @@index([provider, model, taskName, createdAt]) // pour le Router : agréger le taux de réussite/coût par (provider, model, taskName)
   @@map("model_eval_results")
 }
+
+// ============================================================================
+// ONDEAL AI CORE — PHASE 3 : SYSTEM CODER (Coder Agent + Sandbox + Browser/
+// Vision), fondation (06/09/2026).
+//
+// CoderMission/CoderMissionStep/CoderMissionArtifact reprennent EXACTEMENT
+// la mécanique Job/JobStep/JobArtifact (journal d'ajout seul — un retry crée
+// une NOUVELLE ligne au même index, jamais une réécriture ; currentStepIndex
+// comme SEULE source de reprise ; heartbeat pour détecter un step abandonné ;
+// JobStatus/JobStepStatus/JobArtifactKind réutilisés TELS QUELS, aucun
+// nouvel enum) — c'est la réutilisation explicitement demandée du Job
+// Engine, pas une réinvention.
+//
+// Sans storeId, DÉLIBÉRÉMENT, même principe que ModelEvalRun/ModelEvalResult
+// en PHASE 2 : une mission Coder Agent n'agit JAMAIS sur la donnée d'UNE
+// boutique cliente, elle agit sur LE DÉPÔT OnDeal Intelligence lui-même
+// (repo, tests, build, preview interne) — SYSTEM CODER = PLATFORM OWNER
+// ONLY (voir src/lib/authz/capabilities.ts, capacité "SYSTEM_CODER" ;
+// STORE OWNER/STORE ADMIN/AGENCY CLIENT n'y ont explicitement PAS accès,
+// quel que soit leur rôle Membership). createdByUserId reste NON NULL ici
+// (contrairement à Job.createdByUserId, nullable) précisément parce
+// qu'aucune mission système ne doit jamais exister sans un propriétaire
+// plateforme identifié — c'est le point d'audit de dernier recours.
+model CoderMission {
+  id               String    @id @default(cuid())
+  goal             String    // objectif en langage naturel — jamais modifié après création (reprise = rejoue seulement les steps, comme Job.inputJson)
+  status           JobStatus @default(QUEUED)
+  currentStepIndex Int       @default(0)
+  attempt          Int       @default(0)
+  maxAttempts      Int       @default(3) // NO BLIND LOOP — même garde que Job.maxAttempts
+  cancelRequested  Boolean   @default(false)
+  createdByUserId  String    // PLATFORM OWNER uniquement, jamais null — voir commentaire ci-dessus
+  resultJson       String?
+  lastError        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  startedAt        DateTime?
+  finishedAt        DateTime?
+
+  steps     CoderMissionStep[]
+  artifacts CoderMissionArtifact[]
+
+  @@index([status, createdAt])
+  @@map("coder_missions")
+}
+
+model CoderMissionStep {
+  id          String        @id @default(cuid())
+  missionId   String
+  index       Int           // position dans le plan — 0-based, stable une fois écrit
+  attempt     Int           @default(1) // nouvelle ligne par retry, jamais une réécriture — même principe que JobStep
+  name        String        // ex. "inspect" | "plan" | "edit" | "typecheck" | "lint" | "test" | "build" | "preview" | "browser" | "vision" | "critic" | "fix" — libre, jamais un enum figé
+  status      JobStepStatus @default(PENDING)
+  inputJson   String?
+  outputJson  String?
+  errorJson   String?
+  provider    String?       // "anthropic" — null si le step est purement mécanique (ex. runTypecheck n'appelle aucun modèle)
+  model       String?
+  costUsd     Float?        // voir src/lib/ai/models/cost.ts — jamais estimé, null si un ingrédient réel manque
+  tokensIn    Int?
+  tokensOut   Int?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  heartbeatAt DateTime?     // même principe que JobStep.heartbeatAt (STALE_HEARTBEAT_MS)
+  createdAt   DateTime      @default(now())
+
+  mission   CoderMission           @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  artifacts CoderMissionArtifact[]
+
+  @@index([missionId, index, attempt])
+  @@map("coder_mission_steps")
+}
+
+model CoderMissionArtifact {
+  id         String          @id @default(cuid())
+  missionId  String
+  stepId     String?
+  kind       JobArtifactKind // SCREENSHOT (browser/vision) | DIFF (edit) | LOG (typecheck/lint/test/build) | FILE | OTHER — même enum que Job Engine, aucun nouveau
+  storageRef String          // chemin/URL vers le fichier réel — jamais le contenu en base (même principe que JobArtifact.storageRef)
+  metaJson   String?
+  createdAt  DateTime        @default(now())
+
+  mission CoderMission      @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  step    CoderMissionStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
+
+  @@index([missionId])
+  @@map("coder_mission_artifacts")
+}

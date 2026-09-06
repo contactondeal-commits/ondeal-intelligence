@@ -1,0 +1,77 @@
+# ONDEAL AI CORE — PHASE 3 : runner PRODUCT RUNTIME du Coder Agent (06/09/2026).
+#
+# CONÇU mais PAS ENCORE câblé en déclenchement live (voir le rapport de
+# session : "DEV PROOF vs PRODUCT RUNTIME", §21 de la commande PHASE 3).
+# Objectif : exécuter runMissionToCompletion (scripts/run-coder-mission.ts)
+# sans AUCUN nouveau service payant — GitHub Actions donne déjà : git,
+# Node, réseau, ET permet d'installer Chromium (Playwright) — le tout
+# gratuitement sur dépôt privé jusqu'à 3000 min/mois sur ce plan (vérifié
+# le 06/09/2026 sur docs.github.com/billing/managing-billing-for-github-
+# actions/about-billing-for-github-actions ; au-delà, 0.006$/min Linux —
+# largement sous le plafond de 50€/mois autorisé). Zéro nouveau fournisseur.
+#
+# Ce que ce fichier NE fait PAS encore : le Job Engine (POST
+# /api/coder-missions, Vercel) ne déclenche PAS ce workflow via l'API GitHub
+# (workflow_dispatch) et n'en récupère pas le résultat — cette intégration
+# (déclenchement + polling + récupération d'artefacts depuis la route
+# Vercel) reste le chantier PRODUCT RUNTIME explicitement signalé comme
+# restant, pas fabriqué ici. `workflow_dispatch` ci-dessous permet déjà un
+# déclenchement MANUEL (onglet Actions, ou `gh workflow run`) pour vérifier
+# le runner lui-même indépendamment de cette intégration.
+#
+# ANTHROPIC_API_KEY doit être configurée en secret de dépôt (Settings →
+# Secrets → Actions) — jamais commitée, jamais dans ce fichier.
+name: coder-mission
+
+on:
+  workflow_dispatch:
+    inputs:
+      missionId:
+        description: "ID de la CoderMission (déjà créée via POST /api/coder-missions, statut QUEUED)"
+        required: true
+      previewPath:
+        description: "Chemin de la page à vérifier (ex. /settings)"
+        required: true
+        default: "/"
+      pageDescription:
+        description: "Description de la page pour le Visual Reviewer"
+        required: false
+        default: "Page interne OnDeal Intelligence."
+
+jobs:
+  run-mission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # NO BLIND LOOP au niveau CI aussi — jamais un job qui tourne indéfiniment
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      # Chromium seul (pas Firefox/WebKit) — c'est le seul navigateur utilisé par browser.ts.
+      - run: npx playwright install --with-deps chromium
+
+      - name: Run mission
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: >
+          npm run coder:run --
+          --mission "${{ github.event.inputs.missionId }}"
+          --repo "$GITHUB_WORKSPACE"
+          --port 3917
+          --path "${{ github.event.inputs.previewPath }}"
+          --page-description "${{ github.event.inputs.pageDescription }}"
+
+      - name: Upload mission artifacts (screenshots, diff, logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coder-mission-${{ github.event.inputs.missionId }}
+          path: /tmp/ondeal-coder-missions/${{ github.event.inputs.missionId }}/.mission-*
+          if-no-files-found: ignore
+          retention-days: 14

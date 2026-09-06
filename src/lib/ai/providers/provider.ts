@@ -14,10 +14,18 @@
  *
  * `assistant.ts` N'A PAS ENCORE été migré vers cette interface — décision
  * délibérée de cette fondation : ce fichier est en cours de déploiement
- * production (chantier archiver/republier, 8/10 fichiers livrés au moment
+ * production (chantier archiver/républier, 8/10 fichiers livrés au moment
  * où cette fondation est écrite) et ne doit pas être touché par un chantier
  * d'architecture séparé. La migration d'assistant.ts vers AnthropicProvider
  * est une étape ultérieure explicite, pas un effet de bord de ce commit.
+ *
+ * PHASE 3 (06/09/2026) : `images` s'ajoute à GenerateRequest parce qu'un
+ * appelant RÉEL en a maintenant besoin — le Visual Reviewer/Critic du Coder
+ * Agent (src/lib/ai/coder/vision.ts) envoie une capture d'écran RÉELLE
+ * (Playwright) au modèle. `ModelCapabilities.vision` existait déjà depuis
+ * PHASE 2 mais n'était vérifié par aucun appelant ; c'est désormais le cas
+ * (voir vision.ts : refuse d'appeler un modèle dont `capabilities().vision`
+ * est faux, jamais un appel silencieusement dégradé en texte seul).
  */
 
 export interface ModelCapabilities {
@@ -43,6 +51,15 @@ export interface GenerateRequest {
    * besoin (§ voir ONDEAL AI JOB ENGINE, "verification hooks" à venir).
    */
   webSearch?: { maxUses: number };
+  /**
+   * Images RÉELLES (jamais une description texte substituée) à joindre au
+   * tour utilisateur — voir Coder Agent / Visual Reviewer. `data` est le
+   * contenu déjà encodé en base64 (jamais une URL distante non vérifiée —
+   * évite tout SSRF côté provider). Un provider dont `capabilities(model)
+   * .vision` est faux DOIT rejeter une requête avec `images` non vide
+   * plutôt que d'ignorer silencieusement les images (voir anthropic.ts).
+   */
+  images?: Array<{ mediaType: "image/png" | "image/jpeg" | "image/webp"; data: string }>;
 }
 
 export interface GenerateResultCitation {

@@ -18,7 +18,16 @@ export type GauntletCategory =
   | "cro"
   | "ecommerce_reasoning"
   | "visual_quality"
-  | "reliability";
+  | "reliability"
+  // PHASE 3 (§17) — catégories introduites par le Coder Agent (sandbox +
+  // navigateur + vision), toutes déjà exemplifiées par au moins une tâche
+  // RÉELLEMENT accomplie dans corpus.ts (jamais ajoutées à vide) :
+  | "code_understanding"
+  | "code_generation"
+  | "test_repair"
+  | "browser_navigation"
+  | "visual_review"
+  | "visual_fix";
 
 export interface GauntletTask {
   id: string;
