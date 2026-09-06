@@ -16,7 +16,8 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "coder:run": "tsx scripts/run-coder-mission.ts"
+    "coder:run": "tsx scripts/run-coder-mission.ts",
+    "e2e:smoke": "tsx scripts/e2e-smoke.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.3.1",
