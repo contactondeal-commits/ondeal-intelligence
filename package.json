@@ -18,7 +18,9 @@
     "db:studio": "prisma studio",
     "coder:run": "tsx scripts/run-coder-mission.ts",
     "e2e:smoke": "tsx scripts/e2e-smoke.ts",
-    "red-team": "tsx scripts/red-team.ts"
+    "red-team": "tsx scripts/red-team.ts",
+    "merchant-e2e": "tsx scripts/merchant-e2e.ts",
+    "forced-failure": "tsx scripts/forced-failure.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.3.1",
