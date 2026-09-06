@@ -15,7 +15,7 @@ import { callWithStepUp } from "@/app/ai-lab/stepUp";
  * connecteur NOT_CONFIGURED s'affiche tel quel, jamais masqué.
  */
 
-type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "evolution" | "images" | "policy" | "audit";
+type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "evolution" | "images" | "outcomes" | "policy" | "audit";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "composer", label: "Composer" },
@@ -28,6 +28,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "experiments", label: "Experiments" },
   { id: "evolution", label: "Evolution" },
   { id: "images", label: "Images" },
+  { id: "outcomes", label: "Outcomes" },
   { id: "policy", label: "Owner Control Center" },
   { id: "audit", label: "Audit" },
 ];
@@ -228,6 +229,7 @@ export default function AiLabConsole({ ownerEmail }: { ownerEmail: string }) {
         {tab === "experiments" && <ExperimentsTab onError={setError} />}
         {tab === "evolution" && <EvolutionTab onError={setError} />}
         {tab === "images" && <ImagesTab onError={setError} />}
+        {tab === "outcomes" && <OutcomesTab onError={setError} />}
         {tab === "policy" && <PolicyTab policy={policy} onChanged={refreshPolicy} onError={setError} />}
         {tab === "audit" && <AuditTab onError={setError} />}
       </main>
@@ -998,6 +1000,85 @@ function AgentsTab({ onError }: { onError: (e: string) => void }) {
         </div>
       ))}
       {agents.length === 0 && <p style={{ color: "var(--color-text-faint)" }}>Chargement…</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OUTCOMES — Outcome/ROI Engine (FINAL PHASE, 06/09/2026) : chaque nombre ici
+// vient d'une VRAIE agrégation (voir src/lib/ai/outcomes/engine.ts) — un
+// dénominateur nul affiche "Pas encore de mesure" (jamais un taux fabriqué).
+// ---------------------------------------------------------------------------
+interface OutcomeSummaryView {
+  missions: { total: number; byStatus: Record<string, number>; totalCostUsd: number; avgCostUsd: number | null; successRatePct: number | null };
+  evolution: { total: number; byStatus: Record<string, number>; shippedCount: number; shipRatePct: number | null; realShippedPrUrls: string[] };
+  experiments: { total: number; completed: number; winRatePct: null; avgCostPerExperimentUsd: number | null; avgWinnerScore: number | null };
+  generatedAt: string;
+}
+
+function pct(v: number | null): string {
+  return v == null ? "Pas encore de mesure" : `${v}%`;
+}
+function usd(v: number | null): string {
+  return v == null ? "Pas encore de mesure" : `$${v.toFixed(2)}`;
+}
+
+function OutcomesTab({ onError }: { onError: (e: string) => void }) {
+  const [summary, setSummary] = useState<OutcomeSummaryView | null>(null);
+
+  const refresh = useCallback(() => {
+    callWithStepUp<{ summary: OutcomeSummaryView }>("/api/ai-lab/outcomes").then((r) => setSummary(r.summary)).catch((e) => onError(String(e)));
+  }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (!summary) return <p style={{ color: "var(--color-text-faint)" }}>Chargement…</p>;
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <p style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+        Agrégation RÉELLE des missions, des propositions d&apos;évolution et des expériences déjà exécutées (jamais une valeur inventée) — dernier calcul :{" "}
+        {new Date(summary.generatedAt).toLocaleString("fr-FR")}.
+      </p>
+
+      <div style={cardStyle}>
+        <strong style={{ fontSize: 13 }}>Missions AI Lab</strong>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
+          {summary.missions.total} mission(s) au total · coût cumulé {usd(summary.missions.totalCostUsd)} · coût moyen {usd(summary.missions.avgCostUsd)} · taux de succès (états terminaux uniquement) {pct(summary.missions.successRatePct)}
+        </p>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+          {Object.entries(summary.missions.byStatus).map(([status, count]) => (
+            <Badge key={status} tone={status === "SUCCEEDED" ? "ok" : status === "FAILED" ? "err" : "info"}>{status} · {count}</Badge>
+          ))}
+          {Object.keys(summary.missions.byStatus).length === 0 && <span style={{ fontSize: 12, color: "var(--color-text-faint)" }}>Aucune mission encore créée.</span>}
+        </div>
+      </div>
+
+      <div style={cardStyle}>
+        <strong style={{ fontSize: 13 }}>System Evolution</strong>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
+          {summary.evolution.total} proposition(s) au total · {summary.evolution.shippedCount} livrée(s) · taux de livraison (décisions Owner déjà tranchées) {pct(summary.evolution.shipRatePct)}
+        </p>
+        {summary.evolution.realShippedPrUrls.length > 0 && (
+          <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
+            {summary.evolution.realShippedPrUrls.map((url) => (
+              <a key={url} href={url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--color-primary)" }}>{url}</a>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={cardStyle}>
+        <strong style={{ fontSize: 13 }}>Experiment Mode</strong>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
+          {summary.experiments.total} expérience(s) au total ({summary.experiments.completed} terminée(s)) · coût moyen par expérience {usd(summary.experiments.avgCostPerExperimentUsd)} · score moyen des variantes gagnantes {summary.experiments.avgWinnerScore == null ? "Pas encore de mesure" : summary.experiments.avgWinnerScore}
+        </p>
+        <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 4 }}>
+          Taux de victoire (win rate) : écart honnête — aucun champ « variante de contrôle » structuré n&apos;existe encore pour le calculer réellement, jamais un taux inventé ici.
+        </p>
+      </div>
     </div>
   );
 }
