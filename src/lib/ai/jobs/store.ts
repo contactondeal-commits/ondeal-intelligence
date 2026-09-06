@@ -216,3 +216,23 @@ export async function isCancelRequested(jobId: string): Promise<boolean> {
   const job = await prisma.job.findUnique({ where: { id: jobId }, select: { cancelRequested: true } });
   return job?.cancelRequested ?? false;
 }
+
+/**
+ * Réclame UN job précis par id (contrairement à claimNextQueuedJob, qui
+ * pioche dans la file globale) — pour l'exécution à la demande via
+ * POST /api/jobs/[id]/run (06/09/2026, PHASE 1 vertical slice). Garde
+ * NO DUPLICATE CLAIM : `updateMany` scopé par id + storeId + statut éligible
+ * est une opération atomique côté Postgres pour une même ligne (le verrou de
+ * ligne pris par l'UPDATE garantit qu'un second appel concurrent, quel qu'il
+ * soit, voit le statut déjà changé et obtient count === 0) — pas besoin de
+ * FOR UPDATE SKIP LOCKED ici, qui répond à un problème différent (choisir UNE
+ * ligne parmi plusieurs candidates, voir claimNextQueuedJob).
+ */
+export async function claimJobById(jobId: string, storeId: string) {
+  const result = await prisma.job.updateMany({
+    where: { id: jobId, storeId, status: { in: ["QUEUED", "WAITING_RETRY"] } },
+    data: { status: "RUNNING", startedAt: new Date() },
+  });
+  if (result.count === 0) return null;
+  return prisma.job.findFirst({ where: { id: jobId, storeId } });
+}
