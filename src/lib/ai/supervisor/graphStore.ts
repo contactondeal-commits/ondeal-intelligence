@@ -194,6 +194,19 @@ export async function markMissionCancelled(missionId: string) {
   });
 }
 
+/** PHASE 5 (§"Real-Time Controls" — PAUSE/RESUME/CANCEL) : pose le flag coopératif lu par isCancelRequested() ; jamais une coupure forcée. */
+export async function requestMissionCancellation(missionId: string): Promise<void> {
+  await prisma.storefrontMission.update({ where: { id: missionId }, data: { cancelRequested: true } });
+}
+
+/** PHASE 5 (§"Hard Budget"/borne murale Vercel) : arrêt coopératif RÉSUMABLE — distinct de CANCELLED (demandé par l'owner) et de FAILED (erreur réelle). */
+export async function markMissionPaused(missionId: string, reason: string): Promise<void> {
+  await prisma.storefrontMission.update({
+    where: { id: missionId },
+    data: { status: "PAUSED", lastError: reason },
+  });
+}
+
 export async function isCancelRequested(missionId: string): Promise<boolean> {
   const mission = await prisma.storefrontMission.findUnique({ where: { id: missionId }, select: { cancelRequested: true } });
   return mission?.cancelRequested ?? false;

@@ -21,6 +21,13 @@ const ANTHROPIC_CAPABILITIES: Record<string, ModelCapabilities> = {
   "claude-fable-5-1": { maxContextTokens: 1_000_000, vision: true, toolUse: true, costPerMTokIn: 10, costPerMTokOut: 50 },
 };
 
+// PHASE 5 (06/09/2026) — exporté pour le Model Console (AI Lab Ultimate,
+// §"AI LAB → MODELS") : liste RÉELLE des modèles connus par ce provider,
+// jamais une liste dupliquée à la main ailleurs.
+export function listAnthropicModelIds(): string[] {
+  return Object.keys(ANTHROPIC_CAPABILITIES);
+}
+
 interface AnthropicContentBlock {
   type: string;
   text?: string;

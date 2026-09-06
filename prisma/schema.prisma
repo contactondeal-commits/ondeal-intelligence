@@ -57,9 +57,9 @@ model Organization {
   // Shopify (ACTIVE/PENDING/CANCELLED/EXPIRED/FROZEN/DECLINED) est conservé
   // tel quel — Organization.plan n'est mis à jour QUE quand le webhook
   // app_subscriptions/update confirme un statut ACTIVE.
-  billingProvider              String?   // "shopify" | "stripe" | null
-  shopifySubscriptionId        String?   // GID AppSubscription Shopify
-  shopifySubscriptionStatus    String?   // statut brut renvoyé par Shopify
+  billingProvider              String? // "shopify" | "stripe" | null
+  shopifySubscriptionId        String? // GID AppSubscription Shopify
+  shopifySubscriptionStatus    String? // statut brut renvoyé par Shopify
   shopifySubscriptionUpdatedAt DateTime?
 
   // FACTURATION STRIPE (lot 11, 05/09/2026) — chemin de paiement
@@ -70,10 +70,10 @@ model Organization {
   // discipline que Shopify ci-dessus : `plan` n'est mis à jour QUE quand le
   // webhook Stripe confirme un statut actif — jamais anticipé à la création
   // de la session de paiement.
-  stripeCustomerId             String?   // id client Stripe (cus_...), créé au premier essai de paiement
-  stripeSubscriptionId         String?   // id abonnement Stripe (sub_...)
-  stripeSubscriptionStatus     String?   // statut brut Stripe (active/trialing/past_due/canceled/...)
-  stripeSubscriptionUpdatedAt  DateTime?
+  stripeCustomerId            String? // id client Stripe (cus_...), créé au premier essai de paiement
+  stripeSubscriptionId        String? // id abonnement Stripe (sub_...)
+  stripeSubscriptionStatus    String? // statut brut Stripe (active/trialing/past_due/canceled/...)
+  stripeSubscriptionUpdatedAt DateTime?
 
   memberships Membership[]
   stores      Store[]
@@ -122,42 +122,43 @@ model Membership {
 // ---------------------------------------------------------------------------
 
 model Store {
-  id             String   @id @default(cuid())
-  organizationId String
-  name           String
-  domain         String? // ex: my-store.myshopify.com
-  isDemo         Boolean  @default(false) // Mode Démo — jamais mélangé aux vraies données
-  currency       String   @default("EUR")
+  id                     String   @id @default(cuid())
+  organizationId         String
+  name                   String
+  domain                 String? // ex: my-store.myshopify.com
+  isDemo                 Boolean  @default(false) // Mode Démo — jamais mélangé aux vraies données
+  currency               String   @default("EUR")
   // HYPOTHÈSES boutique (jamais des données Shopify) : transport moyen par
   // commande et taux de frais de paiement, utilisés en repli quand aucune
   // CostAssumption produit n'existe. Explicitement étiquetées "estimées".
   defaultShippingCost    Float?
-  defaultPaymentFeesRate Float?   // ex. 0.029 pour 2.9%
+  defaultPaymentFeesRate Float? // ex. 0.029 pour 2.9%
   // Scopes Admin API réellement accordés lors de l'installation OAuth
   // (ex. "read_products,read_inventory,read_orders"), tels que renvoyés par
   // Shopify — jamais supposés. null = boutique connectée par jeton manuel
   // (parcours pré-OAuth) ou non connectée.
   shopifyGrantedScope    String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
-  integrations     Integration[]
-  products         Product[]
-  reviews          Review[]
-  testReviews      TestReview[]
-  scoreSnapshots   ScoreSnapshot[]
-  recommendations  Recommendation[]
-  actions          ActionItem[]
-  auditLogs        AuditLog[]
-  syncRuns         SyncRun[]
-  costAssumptions  CostAssumption[]
-  orders           Order[]
-  marginSnapshots  MarginSnapshot[]
+  integrations              Integration[]
+  products                  Product[]
+  reviews                   Review[]
+  testReviews               TestReview[]
+  scoreSnapshots            ScoreSnapshot[]
+  recommendations           Recommendation[]
+  actions                   ActionItem[]
+  auditLogs                 AuditLog[]
+  syncRuns                  SyncRun[]
+  costAssumptions           CostAssumption[]
+  orders                    Order[]
+  marginSnapshots           MarginSnapshot[]
   analyticsSnapshots        AnalyticsSnapshot[]
   analyticsChannelSnapshots AnalyticsChannelSnapshot[]
   jobs                      Job[]
+  storefrontMissions        StorefrontMission[] // PHASE 5 — AI Lab Ultimate, mission Supervisor ciblant réellement cette boutique (Store Data/Shopify/GA4/Judge.me/CJ)
 
   @@index([organizationId])
   @@map("stores")
@@ -195,15 +196,15 @@ enum IntegrationStatus {
 // fictive n'est écrite ici : tant qu'un connecteur n'a pas d'enregistrement
 // CONNECTED, l'application affiche "Non connecté".
 model Integration {
-  id                 String              @id @default(cuid())
-  storeId            String
-  provider           IntegrationProvider
-  status             IntegrationStatus   @default(NOT_CONNECTED)
-  encryptedCredentials String?           // JSON chiffré { domain, token, ... }
-  lastSyncedAt       DateTime?
-  lastError          String?
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  id                   String              @id @default(cuid())
+  storeId              String
+  provider             IntegrationProvider
+  status               IntegrationStatus   @default(NOT_CONNECTED)
+  encryptedCredentials String? // JSON chiffré { domain, token, ... }
+  lastSyncedAt         DateTime?
+  lastError            String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -213,18 +214,18 @@ model Integration {
 }
 
 model SyncRun {
-  id          String    @id @default(cuid())
-  storeId     String
-  provider    IntegrationProvider
-  startedAt   DateTime  @default(now())
-  finishedAt  DateTime?
-  status      String    // "running" | "success" | "partial" | "error"
-  itemsFetched Int      @default(0)
-  itemsStored  Int      @default(0)
-  errorCount   Int      @default(0)
-  errorSample  String?  // JSON, échantillon d'erreurs pour diagnostic
-  statsJson    String?  // JSON : comptes détaillés (produits, variantes, unitCost, commandes, lignes, troncatures, durées par étape)
-  triggeredBy  String   // "manual" | "scheduled" | "bulk_import"
+  id           String              @id @default(cuid())
+  storeId      String
+  provider     IntegrationProvider
+  startedAt    DateTime            @default(now())
+  finishedAt   DateTime?
+  status       String // "running" | "success" | "partial" | "error"
+  itemsFetched Int                 @default(0)
+  itemsStored  Int                 @default(0)
+  errorCount   Int                 @default(0)
+  errorSample  String? // JSON, échantillon d'erreurs pour diagnostic
+  statsJson    String? // JSON : comptes détaillés (produits, variantes, unitCost, commandes, lignes, troncatures, durées par étape)
+  triggeredBy  String // "manual" | "scheduled" | "bulk_import"
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -237,27 +238,27 @@ model SyncRun {
 // ---------------------------------------------------------------------------
 
 model Product {
-  id                String   @id @default(cuid())
-  storeId           String
-  shopifyProductId  String   // GID Shopify d'origine
-  handle            String
-  title             String
-  status            String   // active | draft | archived (statut Shopify réel)
-  productType       String?
-  vendor            String?
-  imageUrl          String?
-  createdAtShopify  DateTime?
-  updatedAt         DateTime @updatedAt
-  createdAt         DateTime @default(now())
+  id               String    @id @default(cuid())
+  storeId          String
+  shopifyProductId String // GID Shopify d'origine
+  handle           String
+  title            String
+  status           String // active | draft | archived (statut Shopify réel)
+  productType      String?
+  vendor           String?
+  imageUrl         String?
+  createdAtShopify DateTime?
+  updatedAt        DateTime  @updatedAt
+  createdAt        DateTime  @default(now())
 
-  store    Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  variants Variant[]
-  reviews  Review[]
-  scoreSnapshots ScoreSnapshot[]
+  store           Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  variants        Variant[]
+  reviews         Review[]
+  scoreSnapshots  ScoreSnapshot[]
   recommendations Recommendation[]
-  costAssumption CostAssumption?
-  salesSnapshots SalesSnapshot[]
-  orderLines     OrderLine[]
+  costAssumption  CostAssumption?
+  salesSnapshots  SalesSnapshot[]
+  orderLines      OrderLine[]
 
   @@unique([storeId, shopifyProductId])
   @@index([storeId])
@@ -271,10 +272,10 @@ model Variant {
   shopifyVariantId  String
   title             String
   sku               String?
-  price             Float?   // prix de vente actuel (devise du store), null si non défini
+  price             Float? // prix de vente actuel (devise du store), null si non défini
   compareAtPrice    Float?
-  inventoryQuantity Int?     // stock boutique, null = donnée non disponible
-  supplierStock     Int?     // stock fournisseur si connu (ex. CJ/DSers), null sinon — JAMAIS écrit par la sync Shopify (démo uniquement)
+  inventoryQuantity Int? // stock boutique, null = donnée non disponible
+  supplierStock     Int? // stock fournisseur si connu (ex. CJ/DSers), null sinon — JAMAIS écrit par la sync Shopify (démo uniquement)
   // Coût unitaire RÉEL tel que renseigné dans Shopify (inventoryItem.unitCost),
   // dans la devise indiquée. null = non renseigné côté Shopify. Distinct de
   // CostAssumption (hypothèses saisies à la main dans OnDeal, par produit) :
@@ -302,17 +303,17 @@ model Variant {
 // ---------------------------------------------------------------------------
 
 model Order {
-  id                  String    @id @default(cuid())
-  storeId             String
-  shopifyOrderId      String
-  name                String?   // ex. "#1001"
-  createdAtShopify    DateTime
-  cancelledAt         DateTime?
-  financialStatus     String?   // displayFinancialStatus Shopify (PAID, REFUNDED, PARTIALLY_REFUNDED, ...)
-  currencyCode        String?
-  totalPrice          Float?    // currentTotalPriceSet (après remises, annulations d'articles)
-  totalRefunded       Float?    // totalRefundedSet — conservé pour transparence, jamais déduit silencieusement
-  fetchedAt           DateTime  @default(now())
+  id               String    @id @default(cuid())
+  storeId          String
+  shopifyOrderId   String
+  name             String? // ex. "#1001"
+  createdAtShopify DateTime
+  cancelledAt      DateTime?
+  financialStatus  String? // displayFinancialStatus Shopify (PAID, REFUNDED, PARTIALLY_REFUNDED, ...)
+  currencyCode     String?
+  totalPrice       Float? // currentTotalPriceSet (après remises, annulations d'articles)
+  totalRefunded    Float? // totalRefundedSet — conservé pour transparence, jamais déduit silencieusement
+  fetchedAt        DateTime  @default(now())
 
   store Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
   lines OrderLine[]
@@ -323,17 +324,17 @@ model Order {
 }
 
 model OrderLine {
-  id                  String   @id @default(cuid())
-  orderId             String
-  shopifyLineItemId   String
-  productId           String?  // null si le produit n'existe plus / n'est pas dans le catalogue synchronisé
-  variantId           String?  // null si la variante n'existe plus / n'est pas dans le catalogue synchronisé
-  shopifyProductId    String?
-  shopifyVariantId    String?
-  quantity            Int
-  currentQuantity     Int      // quantité après retraits/remboursements d'articles (Shopify currentQuantity)
-  originalTotal       Float    // originalTotalSet — avant remises
-  discountedTotal     Float    // discountedTotalSet — après remises de ligne et allocation des remises commande
+  id                String  @id @default(cuid())
+  orderId           String
+  shopifyLineItemId String
+  productId         String? // null si le produit n'existe plus / n'est pas dans le catalogue synchronisé
+  variantId         String? // null si la variante n'existe plus / n'est pas dans le catalogue synchronisé
+  shopifyProductId  String?
+  shopifyVariantId  String?
+  quantity          Int
+  currentQuantity   Int // quantité après retraits/remboursements d'articles (Shopify currentQuantity)
+  originalTotal     Float // originalTotalSet — avant remises
+  discountedTotal   Float // discountedTotalSet — après remises de ligne et allocation des remises commande
 
   order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
@@ -352,11 +353,11 @@ model OrderLine {
 // EXCLUES, remboursements NON déduits (donc pas un chiffre d'affaires net).
 // Jours sans vente : pas de ligne. Jamais interpolé.
 model SalesSnapshot {
-  id          String   @id @default(cuid())
-  productId   String
-  date        DateTime
-  unitsSold   Int
-  revenue     Float
+  id        String   @id @default(cuid())
+  productId String
+  date      DateTime
+  unitsSold Int
+  revenue   Float
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
@@ -374,17 +375,17 @@ model SalesSnapshot {
 // (part du CA du jour concernée, pas juste un nombre de lignes) rend cette
 // limite visible plutôt que de gonfler silencieusement un taux moyen.
 model MarginSnapshot {
-  id            String   @id @default(cuid())
-  storeId       String
-  date          DateTime
-  revenue       Float // CA réel du jour (REAL) — toutes lignes, comme SalesSnapshot.revenue
-  totalCost     Float? // somme des coûts totaux, uniquement sur la part du CA à coût connu
-  grossMargin   Float? // prix − coût fournisseur, avant transport/frais, sur la part à coût connu
-  margin        Float? // marge complète (après transport + frais de paiement), sur la part à coût connu
-  marginRate    Float? // margin / (revenue de la part à coût connu) — jamais / revenue total
-  costCoverage  Float // part du CA du jour où le coût est connu (0–1), pas une part du nombre de lignes
-  orderCount    Int
-  unitsSold     Int
+  id           String   @id @default(cuid())
+  storeId      String
+  date         DateTime
+  revenue      Float // CA réel du jour (REAL) — toutes lignes, comme SalesSnapshot.revenue
+  totalCost    Float? // somme des coûts totaux, uniquement sur la part du CA à coût connu
+  grossMargin  Float? // prix − coût fournisseur, avant transport/frais, sur la part à coût connu
+  margin       Float? // marge complète (après transport + frais de paiement), sur la part à coût connu
+  marginRate   Float? // margin / (revenue de la part à coût connu) — jamais / revenue total
+  costCoverage Float // part du CA du jour où le coût est connu (0–1), pas une part du nombre de lignes
+  orderCount   Int
+  unitsSold    Int
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -446,7 +447,7 @@ model Review {
   id               String   @id @default(cuid())
   storeId          String
   productId        String?
-  externalId       String   // id Judge.me
+  externalId       String // id Judge.me
   rating           Int
   title            String?
   body             String?
@@ -491,14 +492,14 @@ model TestReview {
 // jamais inventée : le module Marge affiche alors "Non disponible" pour les
 // calculs qui en dépendent, et liste précisément l'hypothèse manquante.
 model CostAssumption {
-  id                String   @id @default(cuid())
-  storeId           String
-  productId         String   @unique
-  supplierCost      Float?
-  shippingCost      Float?
-  paymentFeesRate   Float?   // ex. 0.029 pour 2.9%
-  otherFixedCost    Float?
-  updatedAt         DateTime @updatedAt
+  id              String   @id @default(cuid())
+  storeId         String
+  productId       String   @unique
+  supplierCost    Float?
+  shippingCost    Float?
+  paymentFeesRate Float? // ex. 0.029 pour 2.9%
+  otherFixedCost  Float?
+  updatedAt       DateTime @updatedAt
 
   store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -512,12 +513,12 @@ model CostAssumption {
 // ---------------------------------------------------------------------------
 
 model ScoreSnapshot {
-  id         String   @id @default(cuid())
-  storeId    String
-  productId  String
-  score      Int      // 0-100
-  factorsJson String  // JSON: détail explicable des facteurs (voir types/index.ts ScoreBreakdown)
-  computedAt DateTime @default(now())
+  id          String   @id @default(cuid())
+  storeId     String
+  productId   String
+  score       Int // 0-100
+  factorsJson String // JSON: détail explicable des facteurs (voir types/index.ts ScoreBreakdown)
+  computedAt  DateTime @default(now())
 
   store   Store   @relation(fields: [storeId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -543,24 +544,24 @@ enum RecommendationStatus {
 }
 
 model Recommendation {
-  id           String                 @id @default(cuid())
-  storeId      String
-  productId    String?
-  category     String                 // "stock" | "margin" | "reviews" | "marketing" | "data_quality" | ...
-  severity     RecommendationSeverity
-  title        String
-  reason       String                 // "Pourquoi ?"
-  impact       String                 // "Impact potentiel ?"
-  confidence   Int                    // 0-100, "Niveau de confiance ?"
-  impactScore  Float?                 // impact € estimé (ex. vélocité × prix × 7j pour une rupture) — null si non calculable, jamais 0 par défaut
-  actionLabel  String?                // "Action proposée ?" (null si aucune action exécutable)
-  actionType   String?                // clé technique utilisée par le moteur d'actions
+  id                String                 @id @default(cuid())
+  storeId           String
+  productId         String?
+  category          String // "stock" | "margin" | "reviews" | "marketing" | "data_quality" | ...
+  severity          RecommendationSeverity
+  title             String
+  reason            String // "Pourquoi ?"
+  impact            String // "Impact potentiel ?"
+  confidence        Int // 0-100, "Niveau de confiance ?"
+  impactScore       Float? // impact € estimé (ex. vélocité × prix × 7j pour une rupture) — null si non calculable, jamais 0 par défaut
+  actionLabel       String? // "Action proposée ?" (null si aucune action exécutable)
+  actionType        String? // clé technique utilisée par le moteur d'actions
   actionPayloadJson String?
-  status       RecommendationStatus   @default(OPEN)
-  createdAt    DateTime               @default(now())
+  status            RecommendationStatus   @default(OPEN)
+  createdAt         DateTime               @default(now())
 
-  store   Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  store       Store        @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product     Product?     @relation(fields: [productId], references: [id], onDelete: SetNull)
   actionItems ActionItem[]
 
   @@index([storeId, status])
@@ -585,11 +586,11 @@ model ActionItem {
   id               String            @id @default(cuid())
   storeId          String
   recommendationId String?
-  type             String            // "update_price" | "update_stock" | "publish" | ...
+  type             String // "update_price" | "update_stock" | "publish" | ...
   sensitivity      ActionSensitivity
   status           ActionStatus      @default(PENDING_VALIDATION)
-  payloadJson      String            // détail de l'action proposée
-  resultJson       String?           // résultat après exécution (ou erreur)
+  payloadJson      String // détail de l'action proposée
+  resultJson       String? // résultat après exécution (ou erreur)
   createdAt        DateTime          @default(now())
   confirmedAt      DateTime?
   executedAt       DateTime?
@@ -606,8 +607,8 @@ model AuditLog {
   id        String   @id @default(cuid())
   storeId   String
   userId    String?
-  actorType String   // "user" | "system"
-  event     String   // ex. "sync.completed", "recommendation.created", "action.confirmed"
+  actorType String // "user" | "system"
+  event     String // ex. "sync.completed", "recommendation.created", "action.confirmed"
   message   String
   metaJson  String?
   createdAt DateTime @default(now())
@@ -657,25 +658,25 @@ enum JobArtifactKind {
 }
 
 model Job {
-  id              String    @id @default(cuid())
-  storeId         String
-  type            String    // ex. "gauntlet_task" — voir src/lib/ai/jobs/types.ts pour la liste ouverte, jamais figée en enum (nouveaux types de tâche sans migration)
-  status          JobStatus @default(QUEUED)
-  inputJson       String    // payload de départ (jamais modifié après création — la reprise ne rejoue QUE les steps, jamais l'input)
-  resultJson      String?   // résultat final (succès) — jamais renseigné avant status SUCCEEDED
-  lastError       String?   // dernière erreur lisible — pour affichage rapide sans relire les steps
-  currentStepIndex Int      @default(0) // prochain index de step à exécuter — la reprise relit ce champ, jamais un recalcul déduit des steps (source unique, mise à jour atomiquement avec le step qui vient de réussir)
-  attempt         Int       @default(0) // tentatives au niveau JOB (relance globale après échec définitif d'un step) — distinct de JobStep.attempt (tentatives au niveau d'UN step)
+  id               String    @id @default(cuid())
+  storeId          String
+  type             String // ex. "gauntlet_task" — voir src/lib/ai/jobs/types.ts pour la liste ouverte, jamais figée en enum (nouveaux types de tâche sans migration)
+  status           JobStatus @default(QUEUED)
+  inputJson        String // payload de départ (jamais modifié après création — la reprise ne rejoue QUE les steps, jamais l'input)
+  resultJson       String? // résultat final (succès) — jamais renseigné avant status SUCCEEDED
+  lastError        String? // dernière erreur lisible — pour affichage rapide sans relire les steps
+  currentStepIndex Int       @default(0) // prochain index de step à exécuter — la reprise relit ce champ, jamais un recalcul déduit des steps (source unique, mise à jour atomiquement avec le step qui vient de réussir)
+  attempt          Int       @default(0) // tentatives au niveau JOB (relance globale après échec définitif d'un step) — distinct de JobStep.attempt (tentatives au niveau d'UN step)
   maxAttempts      Int       @default(3) // NO BLIND LOOP — jamais un job sans plafond explicite
-  cancelRequested Boolean   @default(false) // annulation COOPÉRATIVE — le worker vérifie ce flag entre deux steps, jamais de coupure forcée d'un process externe
-  createdByUserId String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  startedAt       DateTime?
-  finishedAt      DateTime?
+  cancelRequested  Boolean   @default(false) // annulation COOPÉRATIVE — le worker vérifie ce flag entre deux steps, jamais de coupure forcée d'un process externe
+  createdByUserId  String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  startedAt        DateTime?
+  finishedAt       DateTime?
 
-  store Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  steps JobStep[]
+  store     Store         @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  steps     JobStep[]
   artifacts JobArtifact[]
 
   @@index([storeId, status])
@@ -686,24 +687,24 @@ model Job {
 model JobStep {
   id          String        @id @default(cuid())
   jobId       String
-  index       Int           // position dans le plan du job — 0-based, stable une fois écrit
+  index       Int // position dans le plan du job — 0-based, stable une fois écrit
   attempt     Int           @default(1) // 1ère tentative de CET index — une nouvelle ligne par retry, jamais une mise à jour de la précédente (voir commentaire au-dessus du bloc Job Engine)
-  name        String        // ex. "plan" | "execute:tool_x" | "verify" | "critic" — libre, jamais un enum figé
+  name        String // ex. "plan" | "execute:tool_x" | "verify" | "critic" — libre, jamais un enum figé
   status      JobStepStatus @default(PENDING)
   inputJson   String?
   outputJson  String?
   errorJson   String?
-  provider    String?       // "anthropic" | futur "openai"/"google" — voir src/lib/ai/providers/provider.ts ; null si le step ne fait pas d'appel modèle (ex. step purement mécanique)
+  provider    String? // "anthropic" | futur "openai"/"google" — voir src/lib/ai/providers/provider.ts ; null si le step ne fait pas d'appel modèle (ex. step purement mécanique)
   model       String?
   costUsd     Float?
   tokensIn    Int?
   tokensOut   Int?
   startedAt   DateTime?
   finishedAt  DateTime?
-  heartbeatAt DateTime?     // rafraîchi par le worker pendant un step long — un step RUNNING sans heartbeat récent est considéré abandonné et repris (même principe que RUNNING_GUARD_MS dans src/app/api/cron/sync/route.ts)
+  heartbeatAt DateTime? // rafraîchi par le worker pendant un step long — un step RUNNING sans heartbeat récent est considéré abandonné et repris (même principe que RUNNING_GUARD_MS dans src/app/api/cron/sync/route.ts)
   createdAt   DateTime      @default(now())
 
-  job       Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job       Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
   artifacts JobArtifact[]
 
   @@index([jobId, index, attempt])
@@ -711,13 +712,13 @@ model JobStep {
 }
 
 model JobArtifact {
-  id         String           @id @default(cuid())
+  id         String          @id @default(cuid())
   jobId      String
   stepId     String?
   kind       JobArtifactKind
-  storageRef String           // chemin/URL vers le fichier réel — jamais le contenu en base (voir commentaire au-dessus du bloc Job Engine) ; stockage concret (Vercel Blob ou équivalent) non branché à cette fondation, storageRef reste un simple champ texte en attendant
+  storageRef String // chemin/URL vers le fichier réel — jamais le contenu en base (voir commentaire au-dessus du bloc Job Engine) ; stockage concret (Vercel Blob ou équivalent) non branché à cette fondation, storageRef reste un simple champ texte en attendant
   metaJson   String?
-  createdAt  DateTime         @default(now())
+  createdAt  DateTime        @default(now())
 
   job  Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
   step JobStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
@@ -741,7 +742,7 @@ model JobArtifact {
 // dans AuditLog, pas dupliqué ici.
 model ModelEvalRun {
   id          String   @id @default(cuid())
-  taskSetName String   // ex. "grounding_v1" — voir tasks.ts ; string libre, jamais un enum figé (même principe que Job.type)
+  taskSetName String // ex. "grounding_v1" — voir tasks.ts ; string libre, jamais un enum figé (même principe que Job.type)
   createdAt   DateTime @default(now())
 
   results ModelEvalResult[]
@@ -753,16 +754,16 @@ model ModelEvalRun {
 model ModelEvalResult {
   id         String   @id @default(cuid())
   runId      String
-  provider   String   // "anthropic" — voir src/lib/ai/providers/provider.ts
+  provider   String // "anthropic" — voir src/lib/ai/providers/provider.ts
   model      String
-  taskName   String   // voir ModelEvalTask.name dans tasks.ts
+  taskName   String // voir ModelEvalTask.name dans tasks.ts
   passed     Boolean
-  reason     String?  // motif du échec/succès mécanique — jamais un jugement subjectif
+  reason     String? // motif du échec/succès mécanique — jamais un jugement subjectif
   latencyMs  Int
   tokensIn   Int?
   tokensOut  Int?
-  costUsd    Float?   // voir src/lib/ai/models/cost.ts — jamais estimé, null si un ingrédient réel manque
-  textSample String?  // sortie brute tronquée (audit humain) — jamais le texte complet, jamais une donnée client
+  costUsd    Float? // voir src/lib/ai/models/cost.ts — jamais estimé, null si un ingrédient réel manque
+  textSample String? // sortie brute tronquée (audit humain) — jamais le texte complet, jamais une donnée client
   createdAt  DateTime @default(now())
 
   run ModelEvalRun @relation(fields: [runId], references: [id], onDelete: Cascade)
@@ -796,19 +797,19 @@ model ModelEvalResult {
 // plateforme identifié — c'est le point d'audit de dernier recours.
 model CoderMission {
   id               String    @id @default(cuid())
-  goal             String    // objectif en langage naturel — jamais modifié après création (reprise = rejoue seulement les steps, comme Job.inputJson)
+  goal             String // objectif en langage naturel — jamais modifié après création (reprise = rejoue seulement les steps, comme Job.inputJson)
   status           JobStatus @default(QUEUED)
   currentStepIndex Int       @default(0)
   attempt          Int       @default(0)
   maxAttempts      Int       @default(3) // NO BLIND LOOP — même garde que Job.maxAttempts
   cancelRequested  Boolean   @default(false)
-  createdByUserId  String    // PLATFORM OWNER uniquement, jamais null — voir commentaire ci-dessus
+  createdByUserId  String // PLATFORM OWNER uniquement, jamais null — voir commentaire ci-dessus
   resultJson       String?
   lastError        String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   startedAt        DateTime?
-  finishedAt        DateTime?
+  finishedAt       DateTime?
 
   steps     CoderMissionStep[]
   artifacts CoderMissionArtifact[]
@@ -820,21 +821,21 @@ model CoderMission {
 model CoderMissionStep {
   id          String        @id @default(cuid())
   missionId   String
-  index       Int           // position dans le plan — 0-based, stable une fois écrit
+  index       Int // position dans le plan — 0-based, stable une fois écrit
   attempt     Int           @default(1) // nouvelle ligne par retry, jamais une réécriture — même principe que JobStep
-  name        String        // ex. "inspect" | "plan" | "edit" | "typecheck" | "lint" | "test" | "build" | "preview" | "browser" | "vision" | "critic" | "fix" — libre, jamais un enum figé
+  name        String // ex. "inspect" | "plan" | "edit" | "typecheck" | "lint" | "test" | "build" | "preview" | "browser" | "vision" | "critic" | "fix" — libre, jamais un enum figé
   status      JobStepStatus @default(PENDING)
   inputJson   String?
   outputJson  String?
   errorJson   String?
-  provider    String?       // "anthropic" — null si le step est purement mécanique (ex. runTypecheck n'appelle aucun modèle)
+  provider    String? // "anthropic" — null si le step est purement mécanique (ex. runTypecheck n'appelle aucun modèle)
   model       String?
-  costUsd     Float?        // voir src/lib/ai/models/cost.ts — jamais estimé, null si un ingrédient réel manque
+  costUsd     Float? // voir src/lib/ai/models/cost.ts — jamais estimé, null si un ingrédient réel manque
   tokensIn    Int?
   tokensOut   Int?
   startedAt   DateTime?
   finishedAt  DateTime?
-  heartbeatAt DateTime?     // même principe que JobStep.heartbeatAt (STALE_HEARTBEAT_MS)
+  heartbeatAt DateTime? // même principe que JobStep.heartbeatAt (STALE_HEARTBEAT_MS)
   createdAt   DateTime      @default(now())
 
   mission   CoderMission           @relation(fields: [missionId], references: [id], onDelete: Cascade)
@@ -849,7 +850,7 @@ model CoderMissionArtifact {
   missionId  String
   stepId     String?
   kind       JobArtifactKind // SCREENSHOT (browser/vision) | DIFF (edit) | LOG (typecheck/lint/test/build) | FILE | OTHER — même enum que Job Engine, aucun nouveau
-  storageRef String          // chemin/URL vers le fichier réel — jamais le contenu en base (même principe que JobArtifact.storageRef)
+  storageRef String // chemin/URL vers le fichier réel — jamais le contenu en base (même principe que JobArtifact.storageRef)
   metaJson   String?
   createdAt  DateTime        @default(now())
 
@@ -884,7 +885,7 @@ model StorefrontMission {
   id              String    @id @default(cuid())
   goal            String // intention de très haut niveau, langage naturel — jamais réécrite après création
   constraintsJson String? // contraintes/préférences optionnelles fournies par l'owner (budget, ton de marque, etc.)
-  status          JobStatus @default(QUEUED) // PLANNING = le Supervisor construit/étend le graphe ; RUNNING = des nodes s'exécutent
+  status          JobStatus @default(QUEUED) // PLANNING = le Supervisor construit/étend le graphe ; RUNNING = des nodes s'exécutent ; PAUSED = borne murale/budget/kill switch (résumable)
   cancelRequested Boolean   @default(false)
   createdByUserId String // PLATFORM OWNER uniquement, jamais null — même garde que CoderMission
   worldStateJson  String? // dernier WorldState construit (snapshot réel, avec provenance — voir src/lib/ai/supervisor/worldState.ts), jamais réécrit silencieusement : chaque reconstruction est un nouveau node "discover_world_state"
@@ -896,34 +897,138 @@ model StorefrontMission {
   startedAt       DateTime?
   finishedAt      DateTime?
 
-  nodes     StorefrontMissionNode[]
-  artifacts StorefrontMissionArtifact[]
+  // PHASE 5 (06/09/2026) — AI Lab Ultimate : ces 5 champs sont l'objet du
+  // "SPECIALIST CONTRACT" au niveau mission (Owner Sovereignty §5/§12) —
+  // fixés à la création, JAMAIS modifiables par le Supervisor/un
+  // spécialiste lui-même (aucune fonction d'écriture n'existe côté
+  // supervisor/*.ts pour ces colonnes — seule graphStore.ts, appelé
+  // uniquement par les routes API Owner, les écrit).
+  environment   String  @default("SANDBOX") // SANDBOX | PREVIEW | PRODUCTION — SANDBOX par défaut, PRODUCTION jamais choisi implicitement
+  autonomyLevel String  @default("ASSIST") // ASSIST | AUTONOMOUS | DEEP | ULTIMATE — ne change JAMAIS le périmètre de capacités, seulement la profondeur de raisonnement/vérification dans ce périmètre (voir policy/engine.ts)
+  hardBudgetUsd Float? // plafond dur réel (§"Hard Budget") — STOP/PAUSE si dépassé, jamais un dépassement silencieux (graphRunner.ts)
+  storeId       String? // optionnel : boutique RÉELLE ciblée si la mission utilise Store Data/Shopify/GA4/Judge.me/CJ — null pour une mission pure code/recherche qui ne porte sur aucune boutique précise
+  forcedModel   String? // §"Model Console" FORCE MODEL — Owner uniquement, jamais auto-défini par le Supervisor
+
+  store       Store?                      @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  nodes       StorefrontMissionNode[]
+  artifacts   StorefrontMissionArtifact[]
+  attachments AiLabAttachment[]
+  auditLogs   AiLabAuditLog[]
 
   @@index([status, createdAt])
+  @@index([storeId])
   @@map("storefront_missions")
 }
 
+// ============================================================================
+// PHASE 5 (06/09/2026) — AI Lab Ultimate : File Intelligence (pièces jointes).
+//
+// Standalone à la création (missionId null tant que l'owner n'a pas encore
+// créé/choisi la mission qui l'utilisera — upload puis attache, jamais
+// l'inverse) — voir attachments/store.ts. Le contenu RÉEL du fichier reste
+// sur disque (storageRef, même principe que CoderMissionArtifact.storageRef,
+// JAMAIS en base) ; seul le texte EXTRAIT (parsers réels : pdf-parse/
+// mammoth/xlsx/csv, jamais fabriqué) est mis en base, tronqué si nécessaire.
+// ============================================================================
+model AiLabAttachment {
+  id               String   @id @default(cuid())
+  missionId        String?
+  filename         String
+  mimeType         String
+  sizeBytes        Int
+  storageRef       String // chemin réel sur disque du fichier original — jamais le contenu binaire en base
+  kind             String // "PDF" | "DOCX" | "XLSX" | "CSV" | "JSON" | "TXT" | "MD" | "CODE" | "IMAGE" | "UNKNOWN" — dérivé du mimeType/extension réel, jamais supposé
+  parseStatus      String   @default("PENDING") // PENDING | PARSED | FAILED | UNSUPPORTED — UNSUPPORTED si aucun parser réel n'existe pour ce type (jamais un "parsed" fictif)
+  parseError       String?
+  extractedText    String? // texte réellement extrait (tronqué à une taille raisonnable) — null si parseStatus != PARSED
+  uploadedByUserId String
+  createdAt        DateTime @default(now())
+
+  mission StorefrontMission? @relation(fields: [missionId], references: [id], onDelete: SetNull)
+
+  @@index([missionId])
+  @@map("ai_lab_attachments")
+}
+
+// ============================================================================
+// PHASE 5 (06/09/2026) — Owner Sovereignty : Policy Engine + Kill Switch.
+//
+// Singleton RÉEL (une seule ligne, id fixe "singleton") — jamais un fichier
+// de config statique : l'Owner Control Center DOIT pouvoir le modifier au
+// runtime et l'effet doit être immédiat (§17 "NO FAKE CONTROL" : un bouton
+// Owner doit réellement changer ce que lit le runtime). Écrit UNIQUEMENT
+// par les routes API sous requireCapability("SYSTEM_CODER") (policy/engine.ts
+// et supervisor/*.ts ne font que LIRE cette table, jamais l'écrire — §3
+// "AI DOES NOT CONTROL ITS OWN POWER").
+// ============================================================================
+model SystemPolicy {
+  id                       String   @id @default("singleton")
+  killSwitchEngaged        Boolean  @default(false) // §6/§17 : si true, AUCUNE mission ne progresse (vérifié à chaque itération de boucle, graphRunner.ts) — arrêt réel, pas décoratif
+  killSwitchReason         String?
+  defaultAutonomyLevel     String   @default("ASSIST")
+  maxHardBudgetUsdGlobal   Float    @default(20) // plafond ABSOLU qu'AUCUNE mission ne peut dépasser même si son propre hardBudgetUsd est plus élevé — filet de sécurité Owner, jamais contournable par le Supervisor
+  productionEffectsAllowed Boolean  @default(false) // §8 : effecteurs de production toujours DENY tant que false — bascule Owner explicite, jamais activée par défaut
+  updatedByUserId          String?
+  updatedAt                DateTime @updatedAt
+
+  @@map("system_policy")
+}
+
+// ============================================================================
+// PHASE 5 (06/09/2026) — Owner Sovereignty §13 "AUDIT EVERYTHING IMPORTANT".
+//
+// Append-only (aucune fonction UPDATE/DELETE côté code — voir audit.ts) —
+// une ligne par décision de policy ET par exécution de node/tool/connector
+// RÉELLEMENT tentée (jamais seulement les succès). Ne loggue JAMAIS une
+// valeur de secret (§14 : "secret exposure" interdit même à l'Owner).
+// ============================================================================
+model AiLabAuditLog {
+  id           String   @id @default(cuid())
+  missionId    String?
+  nodeKey      String?
+  actorUserId  String? // qui a déclenché (Owner) — null pour une action purement automatique du Supervisor à l'intérieur d'une mission déjà autorisée
+  agentRole    String? // rôle de spécialiste (§"WHICH AGENT")
+  provider     String?
+  model        String?
+  toolId       String? // id du Tool Registry invoqué, si applicable
+  connectorId  String? // id du Connector Registry invoqué, si applicable
+  storeId      String?
+  action       String // ex. "node_execute" | "policy_decision" | "kill_switch_toggle" | "mission_create" | "mission_cancel"
+  decision     String? // ALLOW_AUTO | REQUIRE_APPROVAL | DENY — présent uniquement pour action="policy_decision"
+  riskClass    String?
+  reason       String
+  costUsd      Float?
+  resultStatus String? // "SUCCESS" | "FAILURE" | "DENIED" — jamais absent pour une action terminée
+  createdAt    DateTime @default(now())
+
+  mission StorefrontMission? @relation(fields: [missionId], references: [id], onDelete: SetNull)
+
+  @@index([missionId])
+  @@index([createdAt])
+  @@map("ai_lab_audit_logs")
+}
+
 model StorefrontMissionNode {
-  id          String        @id @default(cuid())
-  missionId   String
-  key         String // identifiant stable du node au sein de la mission (ex. "commerce_analyst", "direction_b_critic") — jamais réutilisé pour un autre rôle une fois créé
-  role        String // rôle du spécialiste ou de l'étape mécanique invoquée — libre, jamais un enum figé (même principe que CoderMissionStep.name) : le catalogue de spécialistes (§6) n'est PAS fermé
+  id            String        @id @default(cuid())
+  missionId     String
+  key           String // identifiant stable du node au sein de la mission (ex. "commerce_analyst", "direction_b_critic") — jamais réutilisé pour un autre rôle une fois créé
+  role          String // rôle du spécialiste ou de l'étape mécanique invoquée — libre, jamais un enum figé (même principe que CoderMissionStep.name) : le catalogue de spécialistes (§6) n'est PAS fermé
   dependsOnJson String? // tableau JSON des `key` de nodes requis SUCCEEDED (ou SKIPPED — branche élaguée) avant exécution ; [] ou null = exécutable dès que la mission tourne
-  status      JobStepStatus @default(PENDING) // PENDING → RUNNING → SUCCEEDED/FAILED ; SKIPPED = branche PRUNE par le Supervisor (§11), jamais supprimée (traçabilité)
-  attempt     Int           @default(1) // nouvelle ligne par retry (même principe que CoderMissionStep.attempt), jamais une réécriture
-  inputJson   String? // contrat Specialist reçu (§7) : objective, context, allowed tools, budget, expected schema
-  outputJson  String? // sortie structurée retournée : findings, evidence, uncertainties, recommendations, confidence, artifacts (§7)
-  confidence  Float? // 0-1, auto-rapportée par le spécialiste — jamais une certitude fabriquée quand la donnée manque (§15)
-  errorJson   String?
-  provider    String?
-  model       String?
-  costUsd     Float?
-  tokensIn    Int?
-  tokensOut   Int?
-  startedAt   DateTime?
-  finishedAt  DateTime?
-  heartbeatAt DateTime? // même principe que CoderMissionStep.heartbeatAt (détection de node "stale")
-  createdAt   DateTime      @default(now())
+  status        JobStepStatus @default(PENDING) // PENDING → RUNNING → SUCCEEDED/FAILED ; SKIPPED = branche PRUNE par le Supervisor (§11), jamais supprimée (traçabilité)
+  attempt       Int           @default(1) // nouvelle ligne par retry (même principe que CoderMissionStep.attempt), jamais une réécriture
+  inputJson     String? // contrat Specialist reçu (§7) : objective, context, allowed tools, budget, expected schema
+  outputJson    String? // sortie structurée retournée : findings, evidence, uncertainties, recommendations, confidence, artifacts (§7)
+  confidence    Float? // 0-1, auto-rapportée par le spécialiste — jamais une certitude fabriquée quand la donnée manque (§15)
+  errorJson     String?
+  provider      String?
+  model         String?
+  costUsd       Float?
+  tokensIn      Int?
+  tokensOut     Int?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  heartbeatAt   DateTime? // même principe que CoderMissionStep.heartbeatAt (détection de node "stale")
+  createdAt     DateTime      @default(now())
 
   mission   StorefrontMission           @relation(fields: [missionId], references: [id], onDelete: Cascade)
   artifacts StorefrontMissionArtifact[]
@@ -942,7 +1047,7 @@ model StorefrontMissionArtifact {
   metaJson   String?
   createdAt  DateTime        @default(now())
 
-  mission StorefrontMission     @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  mission StorefrontMission      @relation(fields: [missionId], references: [id], onDelete: Cascade)
   node    StorefrontMissionNode? @relation(fields: [nodeId], references: [id], onDelete: SetNull)
 
   @@index([missionId])

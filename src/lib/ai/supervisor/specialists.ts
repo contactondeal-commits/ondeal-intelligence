@@ -21,12 +21,30 @@ export const CREATIVE_DIRECTION_TASK_SET = "storefront_creative_direction_v1";
 export const SYNTHESIS_TASK_SET = "storefront_synthesis_v1";
 export const CRITIC_TASK_SET = "storefront_critic_v1";
 export const JUDGE_TASK_SET = "storefront_judge_v1";
+// PHASE 5 (06/09/2026) — AI Lab Ultimate, §"Web Research"/"Data Analysis" :
+// deux nouveaux rôles ouverts, mêmes conventions (task set dédié pour le
+// Router §16, jamais un modèle forcé en dur).
+export const RESEARCH_TASK_SET = "ai_lab_research_v1";
+export const DATA_ANALYSIS_TASK_SET = "ai_lab_data_analysis_v1";
 
 const planNodeSchema = z.object({
   key: z.string().min(1),
   role: z.string().min(1),
   dependsOn: z.array(z.string()),
   objective: z.string().min(1),
+  // PHASE 5 (06/09/2026) — généralisation goal-agnostic (§178) : seuls
+  // pertinents pour un node "coder_implementation" (buildCoderMissionSteps,
+  // Phase 3, RÉUTILISÉ SANS MODIFICATION, exige previewPath/pageDescription
+  // — jamais rendus optionnels côté steps.ts). Optionnels ici : ignorés pour
+  // tout autre rôle, jamais une valeur par défaut fictive appliquée à un
+  // rôle qui n'en a pas besoin.
+  previewPath: z.string().min(1).optional(),
+  pageDescription: z.string().min(1).optional(),
+  // §"Data Analysis" : requête de calcul déterministe optionnelle, portée
+  // par le node "data_analyst" — jamais interprétée par un autre rôle.
+  dataQuery: z
+    .object({ metricKeyPrefix: z.string().min(1), operation: z.enum(["sum", "avg", "min", "max", "count", "delta"]) })
+    .optional(),
 });
 export const planSchema = z.object({ nodes: z.array(planNodeSchema).min(1).max(20) });
 
@@ -87,6 +105,8 @@ export interface StructuredSpecialistResult<T> {
   /** null si le provider ne rapporte pas les tokens réels — jamais fabriqué (même règle que GenerateResult, provider.ts). */
   tokensIn: number | null;
   tokensOut: number | null;
+  /** PHASE 5 (§"Web Research") : citations RÉELLES renvoyées par le provider (jamais une URL inventée) — vide si webSearch n'a pas été demandé ou n'a rien retourné. */
+  citations: Array<{ url: string; title: string | null }>;
 }
 
 const specialistEnvelopeSchema = z.object({
@@ -111,9 +131,11 @@ export async function callStructuredSpecialist<T>(
   userMessage: string,
   dataSchema: z.ZodType<T>,
   maxTokens = 2000,
+  /** PHASE 5 (§"Web Research") : active la recherche web native du provider (ONDEAL_ENABLE_WEB_SEARCH côté anthropic.ts) — jamais activée par défaut pour un rôle qui n'en a pas besoin. */
+  webSearch?: { maxUses: number },
 ): Promise<StructuredSpecialistResult<T>> {
   const choice = await chooseModel(taskSetName);
-  const result = await provider.generate({ model: choice.model, system, userMessage, maxTokens });
+  const result = await provider.generate({ model: choice.model, system, userMessage, maxTokens, webSearch });
   const parsed = extractJson(result.text);
   const envelope = specialistEnvelopeSchema.safeParse(parsed);
   if (!envelope.success) {
@@ -134,6 +156,7 @@ export async function callStructuredSpecialist<T>(
     costUsd: costUsd ?? undefined,
     tokensIn: result.tokensIn,
     tokensOut: result.tokensOut,
+    citations: result.citations,
   };
 }
 

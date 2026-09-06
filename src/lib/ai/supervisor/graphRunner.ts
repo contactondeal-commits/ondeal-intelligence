@@ -14,6 +14,7 @@ import {
   listNodes,
   markMissionCancelled,
   markMissionFailed,
+  markMissionPaused,
   markMissionSucceeded,
   setMissionRunning,
   setMissionWorldState,
@@ -25,27 +26,49 @@ import { buildWorldState } from "@/lib/ai/supervisor/worldState";
 import { buildCatalogue, type SpecialistCatalogue } from "@/lib/ai/supervisor/catalogue";
 import { PLANNING_TASK_SET, callStructuredSpecialist, planSchema } from "@/lib/ai/supervisor/specialists";
 import type { GraphNodeSpec, NodeExecutionResult, SpecialistContract, SpecialistOutput, WorldState } from "@/lib/ai/supervisor/types";
+import { evaluatePolicy, type PolicyContext } from "@/lib/ai/policy/engine";
+import { appendAuditLog } from "@/lib/ai/policy/audit";
 
 /**
- * ONDEAL AI CORE — PHASE 4 : Supervisor — graphe dynamique + boucle
+ * ONDEAL AI CORE — PHASE 4/PHASE 5 : Supervisor — graphe dynamique + boucle
  * d'exécution réelle (06/09/2026), §2/§3/§5/§9/§11/§28/§56.
  *
- * Ce fichier est le SEUL endroit qui décide QUAND un node tourne (aucune
- * logique d'ordonnancement dans catalogue.ts — chaque spécialiste ignore
- * complètement le graphe, cohérent avec §7 "contrat" : un spécialiste ne
- * connaît que SON contrat + les sorties de SES dépendances déclarées).
+ * PHASE 5 (§178, "AI Lab Ultimate") : ce fichier a été GÉNÉRALISÉ — le plan
+ * initial n'est plus câblé sur les 10 rôles fixes de la mission /login
+ * (Phase 4) : la liste de rôles disponibles vient du catalogue RÉEL
+ * (AVAILABLE_ROLES ci-dessous, source unique partagée par le prompt du
+ * planner ET par dispatchSpecialist — jamais deux listes qui peuvent
+ * diverger), "coder_implementation"/"adversarial_critic"/"independent_judge"
+ * sont désormais OPTIONNELS (une mission de pure recherche/analyse n'a pas
+ * besoin de coder ni d'un verdict de Juge), et le node d'implémentation
+ * dérive son objectif du plan lui-même (node.input.objective) plutôt que
+ * d'un schéma "finalBrief" spécifique à la refonte de /login.
  *
  * §28 (RÉUTILISATION LITTÉRALE du Coder Agent PHASE 3, jamais une
- * réimplémentation) : le node "coder_implementation" ne fait RIEN de
- * nouveau — il crée une VRAIE CoderMission (missionStore.createMission),
- * construit ses steps RÉELS (steps.ts::buildCoderMissionSteps, donc
- * inspect→plan→edit→diff→verify_and_fix avec la boucle FIX bornée +
- * typecheck/lint/test/build + preview + browser + vision, TOUT hérité
- * gratuitement) et l'exécute avec missionRunner.ts::runMissionToCompletion
- * SANS AUCUNE MODIFICATION de ces trois fichiers. Le graphe Storefront
- * n'est qu'un ORCHESTRATEUR AU-DESSUS de la mission Coder Agent existante,
- * jamais un chemin d'écriture de code parallèle.
+ * réimplémentation, INCHANGÉ depuis Phase 4) : le node "coder_implementation"
+ * crée une VRAIE CoderMission (missionStore.createMission), construit ses
+ * steps RÉELS (steps.ts::buildCoderMissionSteps) et l'exécute avec
+ * missionRunner.ts::runMissionToCompletion SANS AUCUNE MODIFICATION de ces
+ * trois fichiers.
  */
+
+const AVAILABLE_ROLES = [
+  "brand_strategist",
+  "ux_architect",
+  "cro_strategist",
+  "accessibility_reviewer",
+  "performance_reviewer",
+  "creative_director",
+  "synthesis",
+  "coder_implementation",
+  "adversarial_critic",
+  "independent_judge",
+  "researcher",
+  "data_analyst",
+] as const;
+
+/** Rôles qui n'ont de sens QUE pour la mission historique de refonte de page (Phase 4) — jamais imposés à une mission qui n'en parle pas. Optionnel dans TOUTE mission générique. */
+const OPTIONAL_ROLES = new Set(["coder_implementation", "adversarial_critic", "independent_judge", "creative_director"]);
 
 function dispatchSpecialist(role: string, catalogue: SpecialistCatalogue) {
   switch (role) {
@@ -67,11 +90,15 @@ function dispatchSpecialist(role: string, catalogue: SpecialistCatalogue) {
       return catalogue.adversarialCritic;
     case "independent_judge":
       return catalogue.independentJudge;
+    case "researcher":
+      return catalogue.researcher;
+    case "data_analyst":
+      return catalogue.dataAnalyst;
     default:
       // §85 : un rôle de plan inconnu n'est PAS un blocker "légal/irréversible" —
       // c'est un bug de plan. Jamais silencieusement ignoré (throw explicite,
       // jamais un skip muet) : la mission échoue avec une raison exacte.
-      throw new Error(`Rôle de spécialiste inconnu dans le plan : "${role}" (catalogue.ts n'a pas d'exécuteur pour ce rôle).`);
+      throw new Error(`Rôle de spécialiste inconnu dans le plan : "${role}" (catalogue.ts n'a pas d'exécuteur pour ce rôle — rôles disponibles : ${AVAILABLE_ROLES.join(", ")}).`);
   }
 }
 
@@ -82,25 +109,46 @@ export interface GraphRunnerDeps {
   /** §6 SANDBOX REQUIREMENTS — réutilisé tel quel par buildCoderMissionSteps (steps.ts), jamais un budget par défaut implicite. */
   coderSecurity: MissionSecurityBudget;
   coderPreviewPort: number;
+  /** PHASE 5 (§"Hard Budget") : STOP/PAUSE coopératif dès que le coût cumulé RÉEL dépasse ce plafond — jamais un dépassement silencieux. Absent = pas de plafond (mission Owner sans budget dur explicite). */
+  hardBudgetUsd?: number;
+  /** PHASE 5 (borne murale, compatibilité Vercel serverless) : la boucle s'arrête proprement (statut PAUSED, résumable par un nouvel appel avec le même missionId) si dépassée — jamais une exécution qui court indéfiniment dans une fonction à durée bornée. Absent = pas de borne (dev sandbox / GitHub Actions). */
+  maxWallClockMs?: number;
 }
 
 export type GraphRunnerOutcome =
   | { status: "SUCCEEDED"; missionId: string; totalCostUsd: number }
   | { status: "FAILED"; missionId: string; reason: string }
-  | { status: "CANCELLED"; missionId: string };
+  | { status: "CANCELLED"; missionId: string }
+  | { status: "PAUSED"; missionId: string; reason: string };
 
 /**
  * §5 : le plan initial est un VRAI appel spécialiste (PLANNING_TASK_SET,
  * planSchema), jamais un tableau de nodes codé en dur ici — la
- * décomposition est produite par le modèle à partir du World State réel.
+ * décomposition est produite par le modèle à partir du World State réel et
+ * de l'OBJECTIF RÉEL DE LA MISSION (jamais supposé être une refonte de
+ * page — §178 : goal-agnostic).
  */
 async function planInitialGraph(
   provider: ModelProvider,
   goal: string,
   worldState: WorldState,
-): Promise<{ nodes: Array<{ key: string; role: string; dependsOn: string[]; objective: string }>; costUsd: number | null; provider: string; model: string }> {
-  const system = `Tu es le Supervisor d'OnDeal AI (PHASE 4, §2/§3/§5). Décompose l'objectif de très haut niveau reçu en un GRAPHE de nodes (jamais une liste linéaire figée) — chaque node a une clé unique, un rôle (un des suivants UNIQUEMENT : "brand_strategist", "ux_architect", "cro_strategist", "accessibility_reviewer", "performance_reviewer", "creative_director", "synthesis", "coder_implementation", "adversarial_critic", "independent_judge"), un tableau "dependsOn" (clés d'autres nodes de CE plan), et un objectif précis. Les 5 rôles d'analyse (brand/ux/cro/accessibility/performance) doivent être INDÉPENDANTS (dependsOn vide, §56 : parallélisme) ; "creative_director" doit dépendre des 5 analyses ; "synthesis" doit dépendre de "creative_director" ; "coder_implementation" doit dépendre de "synthesis" ; "adversarial_critic" doit dépendre de "coder_implementation" ; "independent_judge" doit dépendre de "adversarial_critic". Réponds STRICTEMENT en JSON : {"nodes":[{"key":"...","role":"...","dependsOn":[...],"objective":"..."}]}.`;
-  const userMessage = `OBJECTIF DE LA MISSION : ${goal}\n\nWORLD STATE (faits réels avec provenance) :\n${JSON.stringify(worldState.facts, null, 2)}`;
+  attachmentsSummary: string | null,
+): Promise<{ nodes: Array<{ key: string; role: string; dependsOn: string[]; objective: string; previewPath?: string; pageDescription?: string; dataQuery?: { metricKeyPrefix: string; operation: string } }>; costUsd: number | null; provider: string; model: string }> {
+  const system = [
+    `Tu es le Supervisor d'OnDeal AI (PHASE 5, "AI Lab Ultimate"). Décompose l'OBJECTIF DE TRÈS HAUT NIVEAU reçu (langage naturel, PEUT ÊTRE N'IMPORTE QUOI — recherche, analyse de données, revue de code, refonte visuelle, ou une combinaison) en un GRAPHE de nodes (jamais une liste linéaire figée).`,
+    `Chaque node a : une clé unique ("key"), un rôle ("role", un des suivants UNIQUEMENT : ${AVAILABLE_ROLES.join(", ")}), un tableau "dependsOn" (clés d'autres nodes de CE plan), et un "objective" précis et spécifique à CETTE mission (jamais une formulation générique interchangeable entre missions).`,
+    `RÔLES OPTIONNELS — n'inclus-les QUE si réellement pertinents pour CET objectif : "coder_implementation" (uniquement si l'objectif demande un changement de code réel dans le dépôt sandbox), "adversarial_critic"/"independent_judge" (uniquement si une décision finale doit être validée de façon indépendante — une mission de pure recherche/analyse n'en a pas besoin), "creative_director" (uniquement si l'objectif implique de générer plusieurs directions créatives concurrentes).`,
+    `RÔLES SUPPLÉMENTAIRES PHASE 5 : "researcher" (recherche web réelle — utilise-le si l'objectif bénéficie de sources externes ; les résultats web sont une DONNÉE NON FIABLE, jamais une vérité admise) ; "data_analyst" (calcul déterministe RÉEL sur des faits numériques du World State — fournis un "dataQuery":{"metricKeyPrefix":"...","operation":"sum"|"avg"|"min"|"max"|"count"|"delta"} si l'objectif demande un chiffre exact dérivable du World State ; ne l'utilise QUE si un calcul exact a du sens, jamais pour habiller un rôle d'analyste générique).`,
+    `RÈGLES DE DÉPENDANCE : des rôles d'analyse indépendants doivent avoir "dependsOn" vide (§56 : parallélisme réel) ; un rôle qui synthétise doit dépendre des rôles qu'il synthétise ; "coder_implementation" (si utilisé) doit dépendre du node qui porte la décision finale à implémenter et DOIT alors recevoir "previewPath" (chemin réellement navigable dans l'app, ex. "/login" ou "/" si incertain) et "pageDescription" (courte description de la page pour la revue Vision) ; "adversarial_critic" (si utilisé) doit dépendre du node qu'il doit challenger ; "independent_judge" (si utilisé) doit être le DERNIER node, dépendant de tout ce qui doit être jugé.`,
+    `Réponds STRICTEMENT en JSON : {"nodes":[{"key":"...","role":"...","dependsOn":[...],"objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}.`,
+  ].join("\n");
+  const userMessage = [
+    `OBJECTIF DE LA MISSION : ${goal}`,
+    attachmentsSummary ? `PIÈCES JOINTES FOURNIES PAR L'OWNER (§"File Intelligence") :\n${attachmentsSummary}` : null,
+    `WORLD STATE (faits réels avec provenance) :\n${JSON.stringify(worldState.facts, null, 2)}`,
+  ]
+    .filter((s): s is string => Boolean(s))
+    .join("\n\n");
   const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, planSchema, 1500);
   return { nodes: called.output.data.nodes, costUsd: called.costUsd ?? null, provider: called.provider, model: called.model };
 }
@@ -129,47 +177,63 @@ function partitionRunnable(nodes: GraphNodeRow[]): { runnable: GraphNodeRow[]; t
   return { runnable, toCascadeSkip };
 }
 
-/** §28 : délègue ENTIÈREMENT à une vraie CoderMission Phase 3 — aucune réimplémentation de typecheck/lint/test/build/preview/browser/vision ici. */
+/**
+ * §28 : délègue ENTIÈREMENT à une vraie CoderMission Phase 3 — aucune
+ * réimplémentation de typecheck/lint/test/build/preview/browser/vision ici.
+ *
+ * PHASE 5 (§178) : GÉNÉRALISÉ — l'objectif de code vient directement de
+ * node.input.objective (fourni par le plan pour CE node précis, jamais
+ * supposé être "refonte de /login") ; enrichi, si des dépendances existent,
+ * par un résumé de leurs findings/recommendations (générique, marche pour
+ * n'importe quel brief en amont — synthesis, researcher, data_analyst...).
+ */
 async function runCoderImplementationNode(
   node: GraphNodeRow,
   deps: GraphRunnerDeps,
   getNodeOutput: (key: string) => SpecialistOutput | undefined,
 ): Promise<NodeExecutionResult> {
-  const synthesisOutput = getNodeOutput("synthesis");
-  if (!synthesisOutput) {
-    throw new Error(`Node "coder_implementation" exécuté sans sortie "synthesis" disponible — dépendance manquante (jamais un objectif inventé).`);
+  const objective = node.input.objective;
+  if (!objective) {
+    throw new Error(`Node "coder_implementation" ("${node.key}") sans "objective" dans le plan — impossible de dériver un objectif de code sans l'inventer.`);
   }
-  const finalBrief = (synthesisOutput.data as { finalBrief?: Record<string, string> }).finalBrief;
-  if (!finalBrief) {
-    throw new Error(`La sortie "synthesis" ne contient pas de "finalBrief" — impossible de dériver un objectif de code réel sans l'inventer.`);
+
+  const upstreamSummaries: string[] = [];
+  for (const depKey of node.dependsOn) {
+    const depOutput = getNodeOutput(depKey);
+    if (!depOutput) continue;
+    upstreamSummaries.push(
+      `Node "${depKey}" — trouvailles : ${depOutput.findings.join(" | ") || "(aucune)"} — recommandations : ${depOutput.recommendations.join(" | ") || "(aucune)"}`,
+    );
   }
+
   const goal = [
-    `Refonte candidate de /login (sandbox uniquement — §61 : ne JAMAIS toucher à la production) selon le brief validé par la Synthèse :`,
-    `Stratégie : ${finalBrief.strategy}`,
-    `Récit : ${finalBrief.story}`,
-    `Hiérarchie : ${finalBrief.hierarchy}`,
-    `Philosophie visuelle : ${finalBrief.visualPhilosophy}`,
-    `Raisonnement commercial : ${finalBrief.commerceReasoning}`,
-    `Contrainte stricte : ne modifier QUE des fichiers sous src/app/login/ et des composants directement liés — jamais un fichier de données, jamais une route API, jamais schema.prisma.`,
-  ].join("\n");
+    `Objectif d'implémentation (SANDBOX UNIQUEMENT — §61 : ne JAMAIS toucher à la production) : ${objective}`,
+    upstreamSummaries.length > 0 ? `Contexte fourni par les analyses en amont de cette mission :\n${upstreamSummaries.join("\n")}` : null,
+    `Contrainte stricte : rester strictement dans le périmètre de l'objectif ci-dessus — jamais un fichier de données, jamais une route API sensible, jamais schema.prisma, sans lien direct avec cet objectif.`,
+  ]
+    .filter((s): s is string => Boolean(s))
+    .join("\n\n");
 
   const mission = await createMission({ goal, createdByUserId: deps.createdByUserId });
   const claimed = await claimMissionById(mission.id);
   if (!claimed) throw new Error(`Impossible de réclamer la CoderMission "${mission.id}" juste créée (état inattendu — jamais rejoué silencieusement).`);
 
+  const previewPath = (node.input.previewPath as string | undefined) ?? "/";
+  const pageDescription = (node.input.pageDescription as string | undefined) ?? `Page "${previewPath}" d'OnDeal Intelligence, candidate sandbox pour l'objectif : ${objective}`;
+
   const coderConfig: CoderMissionConfig = {
     sourceRepoRoot: deps.sourceRepoRoot,
     security: deps.coderSecurity,
     previewPort: deps.coderPreviewPort,
-    previewPath: "/login",
-    pageDescriptionForVision: "Page /login d'OnDeal Intelligence — sert de page publique de facto (marketing + formulaire de connexion), candidate de refonte premium.",
+    previewPath,
+    pageDescriptionForVision: pageDescription,
   };
   const steps = buildCoderMissionSteps(deps.provider, coderConfig);
   const outcome = await runMissionToCompletion(claimed, steps);
 
   if (outcome.status !== "SUCCEEDED") {
     const reason = outcome.status === "FAILED" ? outcome.reason : `statut ${outcome.status}`;
-    throw new Error(`CoderMission "${mission.id}" (implémentation de la candidate) n'a pas réussi : ${reason}`);
+    throw new Error(`CoderMission "${mission.id}" (implémentation) n'a pas réussi : ${reason}`);
   }
 
   const full = await getMission(mission.id);
@@ -195,7 +259,7 @@ async function runCoderImplementationNode(
       `${artifacts.length} artefact(s) réel(s) persisté(s) (captures d'écran/diff) pour cette CoderMission.`,
     ],
     uncertainties: [
-      "Revue visuelle réalisée par le modèle Vision du Router (Phase 3) uniquement à ce stade du graphe — pas encore de revue humaine indépendante (viendra du node adversarial_critic/independent_judge en aval, qui reçoivent cette sortie).",
+      "Revue visuelle réalisée par le modèle Vision du Router uniquement à ce stade du graphe — pas encore de revue humaine indépendante (viendra du node adversarial_critic/independent_judge en aval si la mission en inclut).",
     ],
     recommendations: iterationCount > 1 ? ["Plusieurs itérations de correction ont été nécessaires — signal à examiner par le Critic/Judge en aval avant tout READY_FOR_RELEASE."] : [],
     confidence: iterationCount === 1 ? 0.85 : Math.max(0.4, 0.85 - 0.15 * (iterationCount - 1)),
@@ -219,32 +283,66 @@ async function runCoderImplementationNode(
 
 /**
  * Boucle principale — réclame et exécute les nodes RUNNABLE jusqu'à ce que
- * le graphe soit dans un état terminal (plus aucun PENDING ni RUNNING).
- * Parallélisme RÉEL pour les nodes indépendants (§56 : "analyses
- * indépendantes tournent SIMULTANÉMENT") via Promise.all sur le lot
- * runnable de CHAQUE itération — jamais un parallélisme entre nodes qui se
- * dépendent (impossible par construction : un node dépendant n'est
- * "runnable" qu'une fois ses dépendances SUCCEEDED, voir partitionRunnable).
+ * le graphe soit dans un état terminal. Parallélisme RÉEL pour les nodes
+ * indépendants (§56) via Promise.all sur le lot runnable de CHAQUE
+ * itération.
+ *
+ * PHASE 5 : RÉSUMABLE (§"Real-Time Controls") — si `missionId` a déjà des
+ * nodes (appel précédent mis en PAUSED par la borne murale), le plan
+ * n'est PAS refait : on reprend directement la boucle sur l'état existant.
+ * Ajoute aussi le plafond de budget dur (STOP/PAUSE, jamais un dépassement
+ * silencieux) et la borne murale (PAUSED, résumable).
  */
 export async function runStorefrontMission(missionId: string, deps: GraphRunnerDeps): Promise<GraphRunnerOutcome> {
   const mission = await getStorefrontMission(missionId);
   if (!mission) throw new Error(`StorefrontMission "${missionId}" introuvable.`);
 
-  const worldState = await buildWorldState(deps.sourceRepoRoot);
-  await setMissionWorldState(missionId, JSON.stringify(worldState));
+  const startedAtMs = Date.now();
+  let totalCostUsd = mission.totalCostUsd ?? 0;
 
-  let totalCostUsd = 0;
+  const isResume = mission.nodes.length > 0;
+  let worldState: WorldState;
+  if (isResume && mission.worldStateJson) {
+    worldState = JSON.parse(mission.worldStateJson) as WorldState;
+  } else {
+    worldState = await buildWorldState(deps.sourceRepoRoot);
+    await setMissionWorldState(missionId, JSON.stringify(worldState));
+  }
 
-  const plan = await planInitialGraph(deps.provider, mission.goal, worldState);
-  totalCostUsd += plan.costUsd ?? 0;
-  await addNodes(
-    missionId,
-    plan.nodes.map((n) => ({ key: n.key, role: n.role, dependsOn: n.dependsOn, input: { objective: n.objective } })),
-  );
+  if (!isResume) {
+    const attachments = await prisma.aiLabAttachment.findMany({ where: { missionId } });
+    const attachmentsSummary =
+      attachments.length > 0
+        ? attachments
+            .map((a) => `- ${a.filename} (${a.mimeType}, ${a.parseStatus}) : ${a.extractedText ? a.extractedText.slice(0, 1500) : "(pas de texte extrait — voir parseError)"}`)
+            .join("\n")
+        : null;
+
+    const plan = await planInitialGraph(deps.provider, mission.goal, worldState, attachmentsSummary);
+    totalCostUsd += plan.costUsd ?? 0;
+    await addNodes(
+      missionId,
+      plan.nodes.map((n) => ({
+        key: n.key,
+        role: n.role,
+        dependsOn: n.dependsOn,
+        input: { objective: n.objective, previewPath: n.previewPath, pageDescription: n.pageDescription, dataQuery: n.dataQuery },
+      })),
+    );
+  }
   await setMissionRunning(missionId);
 
   const catalogue = buildCatalogue(deps.provider);
   const outputsByKey = new Map<string, SpecialistOutput>();
+  // PHASE 5 (reprise, §"Real-Time Controls") : ré-hydrate le cache des
+  // sorties déjà produites lors d'un appel précédent — sinon un node aval
+  // déjà réclamable au moment de la reprise ne pourrait pas lire les
+  // sorties de ses dépendances déjà SUCCEEDED.
+  for (const n of mission.nodes) {
+    if (n.status === "SUCCEEDED" && n.outputJson) {
+      outputsByKey.set(n.key, JSON.parse(n.outputJson) as SpecialistOutput);
+    }
+  }
   const getNodeOutput = (key: string): SpecialistOutput | undefined => outputsByKey.get(key);
 
   // NO BLIND LOOP : bornée par le nombre de nodes jamais réclamable deux fois
@@ -254,7 +352,36 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
   for (;;) {
     if (await isCancelRequested(missionId)) {
       await markMissionCancelled(missionId);
+      await appendAuditLog({ missionId, action: "mission_cancel", reason: "Annulation coopérative demandée par l'Owner (cancelRequested).", resultStatus: "SUCCESS" });
       return { status: "CANCELLED", missionId };
+    }
+
+    // §"Owner Sovereignty" (Kill Switch, §3/§17) : gate RÉEL vérifié à
+    // CHAQUE itération — un Kill Switch engagé pendant l'exécution arrête
+    // la mission dès l'itération suivante, jamais seulement au démarrage.
+    const cognitionGate = await evaluatePolicy({
+      autonomyLevel: mission.autonomyLevel as PolicyContext["autonomyLevel"],
+      environment: mission.environment as PolicyContext["environment"],
+      riskClass: "COGNITION",
+      currentCostUsd: totalCostUsd,
+      hardBudgetUsd: mission.hardBudgetUsd ?? deps.hardBudgetUsd ?? null,
+    });
+    await appendAuditLog({ missionId, action: "policy_decision", decision: cognitionGate.decision, riskClass: "COGNITION", reason: cognitionGate.reason, costUsd: totalCostUsd, resultStatus: cognitionGate.decision === "ALLOW_AUTO" ? "SUCCESS" : "DENIED" });
+    if (cognitionGate.decision !== "ALLOW_AUTO") {
+      await markMissionPaused(missionId, cognitionGate.reason);
+      return { status: "PAUSED", missionId, reason: cognitionGate.reason };
+    }
+
+    if (deps.maxWallClockMs && Date.now() - startedAtMs > deps.maxWallClockMs) {
+      const reason = `Borne murale atteinte (${deps.maxWallClockMs}ms) — mission mise en PAUSE, résumable par un nouvel appel avec le même missionId (jamais une exécution tronquée silencieusement).`;
+      await markMissionPaused(missionId, reason);
+      return { status: "PAUSED", missionId, reason };
+    }
+
+    if (deps.hardBudgetUsd != null && totalCostUsd > deps.hardBudgetUsd) {
+      const reason = `Budget dur dépassé : ${totalCostUsd.toFixed(4)} USD > ${deps.hardBudgetUsd} USD — mission mise en PAUSE (§"Hard Budget" : jamais un dépassement silencieux).`;
+      await markMissionPaused(missionId, reason);
+      return { status: "PAUSED", missionId, reason };
     }
 
     const nodes = await listNodes(missionId);
@@ -283,7 +410,7 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
           const contract: SpecialistContract = {
             role: node.role,
             objective: node.input.objective ?? `Exécuter le rôle "${node.role}" pour la mission "${mission.goal}" (aucun objectif spécifique fourni par le plan — jamais inventé, l'objectif global de la mission sert de repli explicite).`,
-            context: { dependsOnKeys: node.dependsOn },
+            context: { dependsOnKeys: node.dependsOn, dataQuery: node.input.dataQuery },
             allowedTools: [],
             budget: { maxCostUsd: deps.coderSecurity.maxCostUsd },
             outputSchemaName: node.role,
@@ -291,12 +418,39 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
 
           let execResult: NodeExecutionResult & { additionalNodes?: GraphNodeSpec[] };
           if (node.role === "coder_implementation") {
+            // §8 "CONTROLLED EFFECTORS" : le seul rôle de ce catalogue qui
+            // écrit réellement quelque chose (un workspace sandbox Coder
+            // Agent, jamais le dépôt réel) — gate de policy explicite avant
+            // exécution, jamais un ALLOW implicite parce que "c'est déjà du
+            // sandbox de toute façon" côté code appelant.
+            const effectGate = await evaluatePolicy({
+              autonomyLevel: mission.autonomyLevel as PolicyContext["autonomyLevel"],
+              environment: mission.environment as PolicyContext["environment"],
+              riskClass: "SANDBOX_EFFECT",
+              currentCostUsd: totalCostUsd,
+              hardBudgetUsd: mission.hardBudgetUsd ?? deps.hardBudgetUsd ?? null,
+            });
+            await appendAuditLog({ missionId, nodeKey: node.key, agentRole: node.role, action: "policy_decision", decision: effectGate.decision, riskClass: "SANDBOX_EFFECT", reason: effectGate.reason, resultStatus: effectGate.decision === "ALLOW_AUTO" ? "SUCCESS" : "DENIED" });
+            if (effectGate.decision !== "ALLOW_AUTO") {
+              throw new Error(`Policy Engine a refusé le node "coder_implementation" ("${node.key}") : ${effectGate.reason}`);
+            }
             execResult = await runCoderImplementationNode(node, deps, getNodeOutput);
           } else {
             const executor = dispatchSpecialist(node.role, catalogue);
             execResult = await executor({ contract, getNodeOutput, worldState, workspaceRoot: deps.sourceRepoRoot });
           }
 
+          await appendAuditLog({
+            missionId,
+            nodeKey: node.key,
+            agentRole: node.role,
+            provider: execResult.provider,
+            model: execResult.model,
+            action: "node_execute",
+            reason: `Node "${node.key}" (rôle "${node.role}") exécuté avec succès.`,
+            costUsd: execResult.costUsd,
+            resultStatus: "SUCCESS",
+          });
           await succeedNode({
             nodeId: node.id,
             missionId,
@@ -321,6 +475,7 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           await failNode({ nodeId: node.id, error: message });
+          await appendAuditLog({ missionId, nodeKey: node.key, agentRole: node.role, action: "node_execute", reason: message, resultStatus: "FAILURE" });
           return { ok: false as const, key: node.key, error: message };
         } finally {
           clearInterval(heartbeatTimer);
@@ -334,15 +489,31 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
   }
 
   const finalNodes = await listNodes(missionId);
-  const judgeNode = finalNodes.find((n) => n.role === "independent_judge" && n.status === "SUCCEEDED");
   const anyFailed = finalNodes.some((n) => n.status === "FAILED");
+  const anySucceeded = finalNodes.some((n) => n.status === "SUCCEEDED");
 
-  if (!judgeNode || anyFailed) {
+  if (anyFailed || !anySucceeded) {
     const failedKeys = finalNodes.filter((n) => n.status === "FAILED").map((n) => n.key);
-    await markMissionFailed(missionId, `Mission terminée sans verdict du Juge indépendant exploitable. Node(s) en échec : ${failedKeys.join(", ") || "aucun (juge jamais atteint)"}.`);
-    return { status: "FAILED", missionId, reason: "Pas de verdict du Juge indépendant — voir lastError." };
+    await markMissionFailed(missionId, `Mission terminée avec ${failedKeys.length} node(s) en échec (${failedKeys.join(", ") || "aucun"})${!anySucceeded ? " et aucun node réussi" : ""}.`);
+    return { status: "FAILED", missionId, reason: "Voir lastError." };
   }
 
-  await markMissionSucceeded(missionId, { judgeVerdict: judgeNode.output }, totalCostUsd);
+  // PHASE 5 (§178, goal-agnostic) : le résultat final n'exige plus TOUJOURS
+  // un node "independent_judge" (Phase 4 l'imposait — câblé sur la mission
+  // /login qui en avait un). S'il y en a un et qu'il a réussi, son verdict
+  // reste le résultat structurant (comportement Phase 4 inchangé). Sinon,
+  // le résultat est la sortie des nodes "terminaux" du graphe (aucun autre
+  // node ne dépend d'eux) — générique, fonctionne pour n'importe quelle
+  // forme de mission.
+  const judgeNode = finalNodes.find((n) => n.role === "independent_judge" && n.status === "SUCCEEDED");
+  if (judgeNode) {
+    await markMissionSucceeded(missionId, { judgeVerdict: judgeNode.output }, totalCostUsd);
+    return { status: "SUCCEEDED", missionId, totalCostUsd };
+  }
+
+  const dependedOnKeys = new Set(finalNodes.flatMap((n) => n.dependsOn));
+  const terminalNodes = finalNodes.filter((n) => n.status === "SUCCEEDED" && !dependedOnKeys.has(n.key));
+  const finalOutputs = Object.fromEntries(terminalNodes.map((n) => [n.key, n.output]));
+  await markMissionSucceeded(missionId, { finalOutputs }, totalCostUsd);
   return { status: "SUCCEEDED", missionId, totalCostUsd };
 }

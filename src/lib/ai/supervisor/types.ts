@@ -22,7 +22,13 @@ export type FactSource =
   | "REPOSITORY"
   | "INTERNAL_DATABASE"
   | "EXTERNAL_RESEARCH"
-  | "MODEL_INFERENCE";
+  | "MODEL_INFERENCE"
+  // PHASE 5 (06/09/2026) — AI Lab Ultimate : provenance d'un fait extrait
+  // d'un fichier joint par l'owner (pipeline attachments/parse.ts), jamais
+  // confondu avec INTERNAL_DATABASE (donnée OnDeal) ni EXTERNAL_RESEARCH
+  // (web) — un fichier fourni par l'owner est une troisième provenance
+  // distincte.
+  | "USER_ATTACHMENT";
 
 /** §14 : distinguer FACT / INFERENCE / HYPOTHESIS / OPINION — jamais mélangés silencieusement. */
 export type FactKind = "FACT" | "INFERENCE" | "HYPOTHESIS" | "OPINION";

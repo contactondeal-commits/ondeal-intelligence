@@ -451,7 +451,11 @@ interface OpenAnswerTextBlock {
  */
 const WEB_SEARCH_MAX_USES = 3;
 
-function webSearchEnabled(): boolean {
+// PHASE 5 (06/09/2026) — exporté : le Supervisor (supervisor/catalogue.ts,
+// rôle "researcher") réutilise EXACTEMENT ce même gate plutôt que d'inventer
+// un second mécanisme d'activation de la recherche web — un seul interrupteur
+// ONDEAL_ENABLE_WEB_SEARCH pour toute l'application, jamais deux.
+export function webSearchEnabled(): boolean {
   return process.env.ONDEAL_ENABLE_WEB_SEARCH === "true";
 }
 

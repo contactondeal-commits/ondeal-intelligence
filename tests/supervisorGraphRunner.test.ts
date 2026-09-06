@@ -67,7 +67,19 @@ fake.reset();
 
 vi.mock("@/lib/ai/supervisor/graphStore", () => ({
   createStorefrontMission: vi.fn(),
-  getStorefrontMission: async (missionId: string) => (missionId === fake.mission.id ? { id: fake.mission.id, goal: fake.mission.goal } : null),
+  getStorefrontMission: async (missionId: string) =>
+    missionId === fake.mission.id
+      ? {
+          id: fake.mission.id,
+          goal: fake.mission.goal,
+          nodes: fake.nodes.map((n) => ({ ...n, attempt: 1, outputJson: n.output ? JSON.stringify(n.output) : null })),
+          worldStateJson: fake.mission.worldStateJson,
+          totalCostUsd: null,
+          autonomyLevel: "ASSIST",
+          environment: "SANDBOX",
+          hardBudgetUsd: null,
+        }
+      : null,
   listStorefrontMissions: vi.fn(),
   setMissionWorldState: async (_id: string, json: string) => {
     fake.mission.worldStateJson = json;
@@ -116,8 +128,22 @@ vi.mock("@/lib/ai/supervisor/graphStore", () => ({
   markMissionCancelled: async () => {
     fake.status = "CANCELLED";
   },
+  markMissionPaused: async (_id: string, reason: string) => {
+    fake.status = "PAUSED";
+    fake.lastError = reason;
+  },
   isCancelRequested: async () => fake.mission.cancelRequested,
   nodeHeartbeatStale: () => false,
+}));
+
+// PHASE 5 : Policy Engine/Audit mockés (toujours ALLOW_AUTO/no-op ici) — ce
+// fichier teste UNIQUEMENT l'orchestration du graphe (voir en-tête), pas le
+// Policy Engine lui-même (couvert par un futur policyEngine.test.ts dédié).
+vi.mock("@/lib/ai/policy/engine", () => ({
+  evaluatePolicy: async () => ({ decision: "ALLOW_AUTO" as const, reason: "test — toujours autorisé" }),
+}));
+vi.mock("@/lib/ai/policy/audit", () => ({
+  appendAuditLog: async () => {},
 }));
 
 vi.mock("@/lib/ai/supervisor/worldState", () => ({
@@ -183,6 +209,7 @@ vi.mock("@/lib/ai/coder/steps", () => ({
 vi.mock("@/lib/db", () => ({
   prisma: {
     coderMissionArtifact: { findMany: vi.fn().mockResolvedValue([{ id: "a1", missionId: "cm1", stepId: "s1", kind: "SCREENSHOT", storageRef: "/tmp/shot.png", metaJson: null, createdAt: new Date() }]) },
+    aiLabAttachment: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 
