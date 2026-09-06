@@ -45,6 +45,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       status: s.status,
       startedAt: s.startedAt,
       finishedAt: s.finishedAt,
+      // EVIDENCE + USER-VISIBLE RESULT (PHASE 1 vertical slice, 06/09/2026) :
+      // chaque step réussi expose sa sortie réelle (ex. l'évidence de marge
+      // collectée au step 0) sans qu'il faille brancher un stockage
+      // d'artefact séparé — output/erreur ne sont jamais renseignés avant
+      // que le step soit terminé (voir succeedStep/failStep, store.ts).
+      output: s.outputJson ? JSON.parse(s.outputJson) : null,
+      error: s.errorJson ? JSON.parse(s.errorJson) : null,
     })),
   });
 }
