@@ -6,10 +6,10 @@ import { chooseModel } from "@/lib/ai/models/router";
 import { estimateCostUsd } from "@/lib/ai/models/cost";
 import { createMissionWorkspace } from "@/lib/ai/coder/workspace";
 import { editFile, getDiff, readFile, runBuild, runLint, runTests, runTypecheck, searchCode } from "@/lib/ai/coder/operations";
-import { closeBrowser, getConsoleMessages, getFailedRequests, getVisibleText, openBrowser, screenshot } from "@/lib/ai/coder/browser";
+import { closeBrowser, getConsoleMessages, getFailedRequests, getVisibleText, openBrowser, screenshot, setViewport } from "@/lib/ai/coder/browser";
 import { reviewScreenshot } from "@/lib/ai/coder/vision";
 import { startPreviewServer, stopPreviewServer } from "@/lib/ai/coder/preview";
-import type { MissionSecurityBudget, MissionStepDefinition, VisualCriticReport } from "@/lib/ai/coder/types";
+import { CODER_VIEWPORTS, type MissionSecurityBudget, type MissionStepDefinition, type VisualCriticReport } from "@/lib/ai/coder/types";
 
 /**
  * ONDEAL AI CORE — PHASE 3 : plan de mission SYSTEM CODER (06/09/2026).
@@ -179,13 +179,34 @@ export function buildCoderMissionSteps(provider: ModelProvider, config: CoderMis
     },
   };
 
-  /** Un seul essai de la chaîne mécanique+visuelle — jamais un état partiel silencieux : chaque échec porte sa raison exacte. */
+  interface ViewportReview {
+    viewport: string;
+    screenshotPath: string;
+    report: VisualCriticReport;
+    provider: string;
+    model: string;
+    costUsd: number | null;
+  }
+
+  /**
+   * Un seul essai de la chaîne mécanique+visuelle — jamais un état partiel
+   * silencieux : chaque échec porte sa raison exacte.
+   *
+   * §201 "multi-viewport natif" : UNE session de navigateur, redimensionnée
+   * successivement à chaque largeur de `CODER_VIEWPORTS` (desktop/tablet/
+   * mobile) — jamais 3 navigateurs distincts pour 3 largeurs (coût réseau
+   * inutile), jamais une seule capture desktop supposée représentative du
+   * responsive. Chaque largeur produit SA PROPRE capture d'écran persistée
+   * et SA PROPRE revue par le Visual Reviewer — `viewportResults` porte
+   * toujours les résultats des largeurs déjà capturées dans cette tentative,
+   * même en cas d'échec, pour que l'artefact reste visible en preuve.
+   */
   async function attemptVerification(
     root: string,
     attemptNumber: number,
   ): Promise<
-    | { ok: true; visibleText: string; consoleMessages: Array<{ type: string }>; failedRequests: unknown[]; screenshotPath: string; criticReport: VisualCriticReport; criticProvider: string; criticModel: string; criticCostUsd: number | null }
-    | { ok: false; reason: string; screenshotPath?: string }
+    | { ok: true; visibleText: string; consoleMessages: Array<{ type: string }>; failedRequests: unknown[]; viewportResults: ViewportReview[] }
+    | { ok: false; reason: string; viewportResults: ViewportReview[] }
   > {
     for (const [name, fn] of [
       ["typecheck", runTypecheck],
@@ -194,47 +215,52 @@ export function buildCoderMissionSteps(provider: ModelProvider, config: CoderMis
       ["build", runBuild],
     ] as const) {
       const result = await fn(root, security.operationTimeoutMs);
-      if (!result.ok) return { ok: false, reason: `${name} a échoué (timedOut=${result.timedOut}) : ${(result.stderr || result.stdout).slice(0, 2000)}` };
+      if (!result.ok) return { ok: false, reason: `${name} a échoué (timedOut=${result.timedOut}) : ${(result.stderr || result.stdout).slice(0, 2000)}`, viewportResults: [] };
     }
 
     const server = await startPreviewServer(root, previewPort);
     try {
       const url = `${server.origin}${previewPath}`;
-      const session = await openBrowser(url, [server.origin]);
+      const session = await openBrowser(url, [server.origin], CODER_VIEWPORTS[0]);
       try {
         const visibleText = await getVisibleText(session);
         const consoleMessages = getConsoleMessages(session);
         const failedRequests = getFailedRequests(session);
-        const screenshotBase64 = await screenshot(session);
-
-        // Persisté sur disque (§18 Observability : "screenshots" doit être
-        // un artefact réel, jamais seulement une donnée en mémoire perdue
-        // en fin de step) — jamais le contenu binaire en base (même
-        // principe que JobArtifact.storageRef, schema.prisma).
-        const screenshotPath = path.join(root, `.mission-screenshot-attempt-${attemptNumber}.png`);
-        await fs.writeFile(screenshotPath, Buffer.from(screenshotBase64, "base64"));
 
         const consoleErrors = consoleMessages.filter((m) => m.type === "error");
-        if (consoleErrors.length > 0) return { ok: false, reason: `${consoleErrors.length} erreur(s) console navigateur : ${JSON.stringify(consoleErrors.slice(0, 5))}`, screenshotPath };
-        if (failedRequests.length > 0) return { ok: false, reason: `${failedRequests.length} requête(s) réseau échouée(s) : ${JSON.stringify(failedRequests.slice(0, 5))}`, screenshotPath };
+        if (consoleErrors.length > 0) return { ok: false, reason: `${consoleErrors.length} erreur(s) console navigateur : ${JSON.stringify(consoleErrors.slice(0, 5))}`, viewportResults: [] };
+        if (failedRequests.length > 0) return { ok: false, reason: `${failedRequests.length} requête(s) réseau échouée(s) : ${JSON.stringify(failedRequests.slice(0, 5))}`, viewportResults: [] };
 
-        const review = await reviewScreenshot(provider, screenshotBase64, { pageDescription: pageDescriptionForVision });
-        const blockerIssues = review.report.issues.filter((i) => i.severity === "blocker" || i.severity === "high");
-        if (!review.report.overallPass || blockerIssues.length > 0) {
-          return { ok: false, reason: `Verdict visuel négatif : ${blockerIssues.map((i) => i.description).join(" | ") || "overallPass=false"}`, screenshotPath };
+        const viewportResults: ViewportReview[] = [];
+        for (const vp of CODER_VIEWPORTS) {
+          await setViewport(session, vp);
+          const screenshotBase64 = await screenshot(session);
+
+          // Persisté sur disque (§18 Observability : "screenshots" doit
+          // être un artefact réel, jamais seulement une donnée en mémoire
+          // perdue en fin de step) — jamais le contenu binaire en base
+          // (même principe que JobArtifact.storageRef, schema.prisma).
+          const screenshotPath = path.join(root, `.mission-screenshot-attempt-${attemptNumber}-${vp.name}.png`);
+          await fs.writeFile(screenshotPath, Buffer.from(screenshotBase64, "base64"));
+
+          const review = await reviewScreenshot(provider, screenshotBase64, {
+            pageDescription: `${pageDescriptionForVision} (viewport ${vp.name}, ${vp.width}x${vp.height})`,
+          });
+          viewportResults.push({ viewport: vp.name, screenshotPath, report: review.report, provider: review.provider, model: review.model, costUsd: review.costUsd });
         }
 
-        return {
-          ok: true,
-          visibleText,
-          consoleMessages,
-          failedRequests,
-          screenshotPath,
-          criticReport: review.report,
-          criticProvider: review.provider,
-          criticModel: review.model,
-          criticCostUsd: review.costUsd,
-        };
+        const failing = viewportResults.filter((vr) => !vr.report.overallPass || vr.report.issues.some((i) => i.severity === "blocker" || i.severity === "high"));
+        if (failing.length > 0) {
+          const reason = failing
+            .map((vr) => {
+              const blockers = vr.report.issues.filter((i) => i.severity === "blocker" || i.severity === "high");
+              return `[${vr.viewport}] ${blockers.map((i) => i.description).join(", ") || "overallPass=false"}`;
+            })
+            .join(" | ");
+          return { ok: false, reason: `Verdict visuel négatif sur ${failing.length}/${viewportResults.length} viewport(s) : ${reason}`, viewportResults };
+        }
+
+        return { ok: true, visibleText, consoleMessages, failedRequests, viewportResults };
       } finally {
         await closeBrowser(session);
       }
@@ -254,16 +280,30 @@ export function buildCoderMissionSteps(provider: ModelProvider, config: CoderMis
     name: "verify_and_fix",
     async run(ctx) {
       const prior = ctx.input as { workspaceRoot: string; goal: string; plan: { planDescription: string }; editedFiles: string[] };
-      const iterations: Array<{ attempt: number; ok: boolean; reason?: string; fixedFiles?: string[]; screenshotPath?: string }> = [];
+      const iterations: Array<{ attempt: number; ok: boolean; reason?: string; fixedFiles?: string[]; viewportsCaptured?: string[] }> = [];
       const artifacts: Array<{ kind: "SCREENSHOT"; storageRef: string; meta?: Record<string, unknown> }> = [];
       let totalCostUsd = 0;
 
       for (let attempt = 1; attempt <= security.maxFixIterations + 1; attempt++) {
         const result = await attemptVerification(prior.workspaceRoot, attempt);
+        // §201 : un artefact SCREENSHOT PAR VIEWPORT capturé dans cette
+        // tentative — même en cas d'échec, pour que toutes les largeurs
+        // réellement inspectées restent visibles en preuve.
+        for (const vr of result.viewportResults) {
+          artifacts.push({ kind: "SCREENSHOT", storageRef: vr.screenshotPath, meta: { attempt, finalAttempt: result.ok, viewport: vr.viewport } });
+          if (vr.costUsd) totalCostUsd += vr.costUsd;
+        }
+
         if (result.ok) {
-          iterations.push({ attempt, ok: true, screenshotPath: result.screenshotPath });
-          artifacts.push({ kind: "SCREENSHOT", storageRef: result.screenshotPath, meta: { attempt, finalAttempt: true } });
-          if (result.criticCostUsd) totalCostUsd += result.criticCostUsd;
+          iterations.push({ attempt, ok: true, viewportsCaptured: result.viewportResults.map((vr) => vr.viewport) });
+          // Rapport agrégé — un critic report PAR viewport (issues préfixées
+          // par le nom du viewport pour rester lisibles sans changer le
+          // schéma VisualCriticReport, jamais une réécriture de son contrat).
+          const aggregatedReport: VisualCriticReport = {
+            overallPass: true,
+            issues: result.viewportResults.flatMap((vr) => vr.report.issues.map((i) => ({ ...i, description: `[${vr.viewport}] ${i.description}` }))),
+          };
+          const representative = result.viewportResults[0]!;
           // PAS de cleanupWorkspace() ici, volontairement : les artefacts
           // (diff, captures d'écran) référencés par storageRef doivent
           // rester lisibles après le succès de la mission (Observability,
@@ -274,16 +314,15 @@ export function buildCoderMissionSteps(provider: ModelProvider, config: CoderMis
           // auditer, jamais deux chemins de nettoyage à maintenir en
           // cohérence.
           return {
-            output: { success: true, iterations, criticReport: result.criticReport, editedFiles: prior.editedFiles },
-            provider: result.criticProvider,
-            model: result.criticModel,
+            output: { success: true, iterations, criticReport: aggregatedReport, editedFiles: prior.editedFiles },
+            provider: representative.provider,
+            model: representative.model,
             costUsd: totalCostUsd > 0 ? totalCostUsd : 0,
             artifacts,
           };
         }
 
-        iterations.push({ attempt, ok: false, reason: result.reason, screenshotPath: result.screenshotPath });
-        if (result.screenshotPath) artifacts.push({ kind: "SCREENSHOT", storageRef: result.screenshotPath, meta: { attempt, finalAttempt: false } });
+        iterations.push({ attempt, ok: false, reason: result.reason, viewportsCaptured: result.viewportResults.map((vr) => vr.viewport) });
         if (attempt > security.maxFixIterations) {
           throw new Error(`Vérification échouée après ${attempt} tentative(s) (${security.maxFixIterations} correction(s) autorisée(s)) : ${result.reason}`);
         }

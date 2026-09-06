@@ -376,7 +376,7 @@ interface MissionSummary {
 interface MissionDetail {
   mission: MissionSummary & { resultJson: unknown };
   nodes: Array<{ id: string; key: string; role: string; status: string; dependsOn: string[]; output: { findings: string[]; evidence: string[]; recommendations: string[]; confidence: number } | null; provider: string | null; model: string | null; costUsd: number | null }>;
-  artifacts: Array<{ id: string; kind: string; storageRef: string }>;
+  artifacts: Array<{ id: string; kind: string; storageRef: string; meta?: { viewport?: string; attempt?: number; finalAttempt?: boolean } | null }>;
   auditLogs: Array<{ id: string; action: string; reason: string; resultStatus: string | null; createdAt: string }>;
   attachments: Array<{ id: string; filename: string; kind: string; parseStatus: string }>;
 }
@@ -589,7 +589,11 @@ function MissionsTab({ onError }: { onError: (e: string) => void }) {
                 <h4 style={{ fontSize: 13, marginTop: 18 }}>Artefacts ({selected.artifacts.length})</h4>
                 <ul style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
                   {selected.artifacts.map((a) => (
-                    <li key={a.id}>{a.kind} — {a.storageRef}</li>
+                    <li key={a.id}>
+                      {a.kind}
+                      {a.meta?.viewport && ` (${a.meta.viewport}${a.meta.finalAttempt === false ? ", tentative échouée" : ""})`}
+                      {" — "}{a.storageRef}
+                    </li>
                   ))}
                 </ul>
               </>

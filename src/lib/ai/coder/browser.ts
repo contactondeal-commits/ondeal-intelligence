@@ -59,6 +59,18 @@ export async function navigate(session: BrowserSession, url: string, allowedOrig
   await session.page.goto(url, { waitUntil: "networkidle", timeout: 30_000 });
 }
 
+/**
+ * PHASE 5 (suite) — §201 "multi-viewport natif" : redimensionne la page
+ * RÉELLE déjà ouverte (jamais un nouveau navigateur par largeur — un seul
+ * `BrowserSession`, réutilisé, coûte une seule navigation réseau). Le CSS
+ * responsive (media queries) se ré-applique automatiquement au resize,
+ * comportement standard du navigateur — jamais un rechargement de page
+ * nécessaire pour ça.
+ */
+export async function setViewport(session: BrowserSession, viewport: { width: number; height: number }): Promise<void> {
+  await session.page.setViewportSize(viewport);
+}
+
 export async function click(session: BrowserSession, selector: string): Promise<void> {
   await session.page.click(selector, { timeout: 10_000 });
 }

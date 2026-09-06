@@ -71,3 +71,27 @@ export interface VisualCriticReport {
   overallPass: boolean;
   issues: VisualCriticIssue[];
 }
+
+/**
+ * PHASE 5 (suite) — §30/§201 "multi-viewport natif" (06/09/2026).
+ *
+ * Jusqu'ici les largeurs multiples (desktop 1440px, mobile 390px) n'étaient
+ * capturées que par un script ponctuel externe
+ * (`scripts/capture-before-after-screenshots.ts`, voir gauntlet/corpus.ts,
+ * cas "storefront_candidate_vs_production_before_after") — JAMAIS par la
+ * boucle verify_and_fix elle-même. `CODER_VIEWPORTS` rend ça NATIF : chaque
+ * tentative de vérification capture et fait réviser une capture d'écran
+ * réelle à CHACUNE de ces largeurs, jamais une seule capture desktop
+ * supposée représentative du responsive.
+ */
+export interface ViewportSpec {
+  name: string;
+  width: number;
+  height: number;
+}
+
+export const CODER_VIEWPORTS: ViewportSpec[] = [
+  { name: "desktop", width: 1440, height: 900 },
+  { name: "tablet", width: 834, height: 1194 },
+  { name: "mobile", width: 390, height: 844 },
+];
