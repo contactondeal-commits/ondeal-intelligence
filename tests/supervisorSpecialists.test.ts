@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { analystSystemPrompt, callStructuredSpecialist, criticDataSchema, judgeDataSchema } from "@/lib/ai/supervisor/specialists";
+import { analystSystemPrompt, callStructuredSpecialist, criticDataSchema, extractJson, judgeDataSchema } from "@/lib/ai/supervisor/specialists";
 
 /**
  * ONDEAL AI CORE — PHASE 4 : tests de la machinerie spécialiste générique
@@ -108,6 +108,71 @@ describe("callStructuredSpecialist — enveloppe + schéma de rôle", () => {
     const schema = z.object({}).passthrough();
     const result = await callStructuredSpecialist(provider, "storefront_analysis_v1", "system", "user", schema);
     expect(result.output.data).toEqual({ anything: "goes", nested: { ok: true } });
+  });
+});
+
+/**
+ * RÉGRESSION — BUG DE PRODUCTION RÉEL, 3e panne de la chaîne provider→parser
+ * (06/09/2026, une fois ANTHROPIC_API_KEY effectivement configurée en
+ * production) : "Sortie spécialiste : pas un JSON valide" sur une réponse
+ * ```json { "findings": [...], ... tronquée en plein milieu d'une valeur
+ * (signature d'une troncature par max_tokens, jamais un JSON réellement
+ * malformé). Verrouille exactement les cas exigés par le mandat de
+ * l'Owner : JSON brut, fence fermé (json/sans tag), JSON invalide, prose +
+ * JSON mélangés, ET la reproduction de la sortie tronquée réelle — jamais
+ * un assouplissement du parser qui accepterait un JSON partiel/deviné.
+ */
+describe("extractJson — root cause réelle (fence non ancré + troncature max_tokens jamais diagnostiquée)", () => {
+  it("accepte du JSON brut, sans aucun fence Markdown", () => {
+    expect(extractJson('{"nodes":[{"key":"a"}]}')).toEqual({ nodes: [{ key: "a" }] });
+  });
+
+  it("accepte la même enveloppe entourée d'un fence ```json ... ``` fermé", () => {
+    const json = '{"nodes":[{"key":"a"}]}';
+    expect(extractJson("```json\n" + json + "\n```")).toEqual({ nodes: [{ key: "a" }] });
+  });
+
+  it("accepte la même enveloppe entourée d'un fence ``` ... ``` fermé SANS étiquette \"json\"", () => {
+    const json = '{"nodes":[{"key":"a"}]}';
+    expect(extractJson("```\n" + json + "\n```")).toEqual({ nodes: [{ key: "a" }] });
+  });
+
+  it("refuse un JSON syntaxiquement invalide (sans fence) — jamais une réparation silencieuse", () => {
+    expect(() => extractJson('{"nodes":[{"key":"a",}]}')).toThrow(/JSON valide/);
+  });
+
+  it("refuse une réponse \"prose + JSON mélangés\" — jamais une extraction \"cachée\" dans le texte", () => {
+    expect(() => extractJson('Voici le plan demandé :\n{"nodes":[{"key":"a"}]}\nMerci de votre patience.')).toThrow(/JSON valide/);
+  });
+
+  it("refuse une réponse avec du texte AVANT un fence par ailleurs valide — jamais un fence \"trouvé\" au milieu d'une réponse non strictement structurée", () => {
+    const json = '{"nodes":[{"key":"a"}]}';
+    expect(() => extractJson("Voici le résultat :\n```json\n" + json + "\n```")).toThrow(/JSON valide/);
+  });
+
+  it("REPRODUCTION EXACTE de la sortie de production réelle : fence ouvert, jamais refermé (troncature max_tokens) — refusé, avec un message qui NOMME explicitement la troncature probable", () => {
+    // Extrait fidèle de l'erreur observée en production (mission Owner réelle) :
+    // coupure en plein milieu d'une valeur, aucun fence fermant, aucune
+    // accolade fermante — jamais un JSON réellement malformé "classique".
+    const truncatedProductionOutput =
+      '```json\n{ "findings": [ "OnDeal Intelligence possède une architecture React/Next.js complète avec authentification, routing et 27 composants métier spécialisés pour l\'e-commerce. L\'application est un SaaS B2B d\'analyse, non un storefront.", "Le design système est entièrement défini (tokens';
+    expect(() => extractJson(truncatedProductionOutput)).toThrow(/JSON valide/);
+    try {
+      extractJson(truncatedProductionOutput);
+      expect.unreachable("devait lever");
+    } catch (err) {
+      const message = (err as Error).message;
+      // Le correctif doit EXPLICITEMENT nommer la cause probable (troncature
+      // max_tokens) — jamais laisser deviner après coup comme c'était le cas
+      // en production avant ce correctif.
+      expect(message).toMatch(/tronqu.*max_tokens|max_tokens.*tronqu/i);
+      expect(message).toContain("Le design système");
+    }
+  });
+
+  it("refuse un JSON complet mais dont le champ data ne respecte pas le schéma du rôle — vérifié au niveau callStructuredSpecialist, pas extractJson (voir describe ci-dessus)", async () => {
+    const provider = fakeProvider(envelope({ verdict: "PASS" })); // rejectionCase manquant
+    await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema)).rejects.toThrow(/rôle/);
   });
 });
 

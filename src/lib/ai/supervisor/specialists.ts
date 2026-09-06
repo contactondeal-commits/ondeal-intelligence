@@ -108,14 +108,81 @@ export const judgeDataSchema = z.object({
  * inventée" doit rester une SEULE implémentation, jamais deux logiques de
  * parsing JSON qui pourraient diverger silencieusement.
  */
+/**
+ * CORRECTIF (06/09/2026, bug de production réel — 3e panne de la même
+ * chaîne, cette fois révélée par un VRAI appel LLM une fois la clé
+ * Anthropic configurée) : l'ancienne implémentation appliquait un regex de
+ * fence NON ANCRÉ (`/```(?:json)?\s*([\s\S]*?)```/`, sans `^`/`$`), donc
+ * capable de "trouver" un bloc fence n'importe où dans le texte — y compris
+ * au milieu de prose, ce qui reviendrait à extraire un verdict d'une
+ * réponse qui n'est PAS strictement structurée (contraire à "jamais
+ * transformer une réponse prose en verdict"). Et surtout : un fence OUVERT
+ * mais jamais refermé (signature d'une réponse tronquée par la limite de
+ * tokens, max_tokens, avant la fin du JSON) ne matchait PAS du tout ce
+ * regex (qui exige les DEUX fences) — le candidat retombait alors sur le
+ * texte brut englobant encore les backticks d'ouverture, qui échoue
+ * `JSON.parse` pour deux raisons à la fois (backticks + JSON incomplet),
+ * sans jamais le dire clairement dans le message d'erreur.
+ *
+ * Nouvelle implémentation, dans cet ordre, JAMAIS un abandon silencieux ni
+ * une réparation/invention de JSON :
+ *   1. JSON brut (sans fence) — le cas le plus courant.
+ *   2. EXACTEMENT un bloc fence Markdown FERMÉ, sans rien avant/après
+ *      (```json ... ``` ou ``` ... ```) — ancré sur l'ENSEMBLE du texte
+ *      trimé : une réponse "prose + JSON mélangés" (fence ou non) est donc
+ *      TOUJOURS refusée, jamais extraite "au hasard".
+ *   3. Fence OUVERT mais jamais refermé — on retire UNIQUEMENT le marqueur
+ *      d'ouverture (jamais une tentative de deviner/compléter la suite),
+ *      on retente un parsing standard, et l'erreur en cas d'échec NOMME
+ *      explicitement la troncature probable — jamais à deviner après coup.
+ *   4. Sinon : refus explicite (couvre aussi bien le JSON syntaxiquement
+ *      invalide que la prose mélangée à du JSON sans fence).
+ * L'aperçu du texte reçu dans le message d'erreur est porté à 2000
+ * caractères (au lieu de 300) — suffisant pour voir la coupure réelle d'une
+ * troncature, jamais juste le tout début.
+ */
 export function extractJson(text: string): unknown {
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced ? fenced[1]! : text;
+  const trimmed = text.trim();
+  const preview = () => text.slice(0, 2000);
+
+  // 1. JSON brut, sans fence Markdown.
   try {
-    return JSON.parse(candidate.trim());
+    return JSON.parse(trimmed);
   } catch {
-    throw new Error(`Sortie spécialiste : pas un JSON valide — refus (jamais un verdict inventé). Texte reçu : ${text.slice(0, 300)}`);
+    // continue vers les formes fence ci-dessous — jamais un abandon silencieux ici.
   }
+
+  // 2. Exactement un bloc fence Markdown fermé — rien avant/après.
+  const closedFence = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/);
+  if (closedFence) {
+    const inner = closedFence[1]!.trim();
+    try {
+      return JSON.parse(inner);
+    } catch {
+      throw new Error(
+        `Sortie spécialiste : bloc Markdown fermé détecté mais son contenu n'est pas un JSON valide — refus (jamais un verdict inventé/réparé). Texte reçu (2000 premiers caractères) : ${preview()}`,
+      );
+    }
+  }
+
+  // 3. Fence ouvert, jamais refermé — signature typique d'une réponse
+  //    tronquée par max_tokens avant la fin du JSON.
+  if (trimmed.startsWith("```")) {
+    const withoutOpenMarker = trimmed.replace(/^```(?:json)?\s*\n?/, "");
+    const looksUnclosed = !withoutOpenMarker.includes("```");
+    try {
+      return JSON.parse(withoutOpenMarker.trim());
+    } catch {
+      const hint = looksUnclosed
+        ? " Le bloc Markdown n'est JAMAIS refermé dans la réponse reçue — signature typique d'une réponse TRONQUÉE PAR LA LIMITE DE TOKENS (max_tokens) avant la fin du JSON : augmenter maxTokens pour ce rôle est le correctif attendu, jamais une réparation du JSON partiel."
+        : "";
+      throw new Error(`Sortie spécialiste : pas un JSON valide — refus (jamais un JSON deviné/réparé).${hint} Texte reçu (2000 premiers caractères) : ${preview()}`);
+    }
+  }
+
+  // 4. Ni JSON brut valide, ni fence — refus explicite (JSON syntaxiquement
+  //    invalide, ou prose mélangée à du JSON sans fence).
+  throw new Error(`Sortie spécialiste : pas un JSON valide — refus (jamais un verdict inventé). Texte reçu (2000 premiers caractères) : ${preview()}`);
 }
 
 export interface StructuredSpecialistResult<T> {

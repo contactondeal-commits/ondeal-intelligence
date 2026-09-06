@@ -186,7 +186,19 @@ async function planInitialGraph(
   ]
     .filter((s): s is string => Boolean(s))
     .join("\n\n");
-  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, planSchema, 1500);
+  // CORRECTIF (06/09/2026, suite du bug de production réel — 3e itération
+  // du même incident, cette fois révélée par un VRAI appel LLM en
+  // production maintenant que la clé Anthropic est configurée) : 1500
+  // tokens suffisait pour l'ancien prompt "nodes nus", mais le correctif
+  // d'enveloppe ci-dessus (obligatoire pour que callStructuredSpecialist
+  // puisse parser la réponse) ajoute désormais findings/evidence/
+  // uncertainties/recommendations EN PLUS d'un plan pouvant compter jusqu'à
+  // 20 nodes (planSchema.max(20)) — largement suffisant pour tronquer la
+  // réponse avant la fin du JSON, provoquant "pas un JSON valide" (voir
+  // extractJson, specialists.ts). Porté à 4000, cohérent avec les autres
+  // rôles structurés du catalogue (catalogue.ts : 2500-3000 pour des
+  // sorties bien plus petites qu'un plan de 20 nodes).
+  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, planSchema, 4000);
   return { nodes: called.output.data.nodes, costUsd: called.costUsd ?? null, provider: called.provider, model: called.model };
 }
 
@@ -226,7 +238,11 @@ async function planNodesForInstruction(
     `INSTRUCTION OWNER AJOUTÉE EN COURS DE MISSION : ${instruction}`,
     `WORLD STATE ACTUEL (faits réels avec provenance, inclut le travail déjà accompli) :\n${JSON.stringify(worldState.facts, null, 2)}`,
   ].join("\n\n");
-  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, instructionPlanSchema, 1200);
+  // Même correctif de budget que planInitialGraph ci-dessus (enveloppe
+  // complète désormais obligatoire) — plus petit ici (max 10 nodes,
+  // §instructionPlanSchema) mais 1200 restait trop juste pour
+  // findings/evidence/uncertainties/recommendations en plus des nodes.
+  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, instructionPlanSchema, 2500);
   return { nodes: called.output.data.nodes.map(({ key, role, objective, previewPath, pageDescription, dataQuery }) => ({ key, role, objective, previewPath, pageDescription, dataQuery })), costUsd: called.costUsd ?? null };
 }
 
