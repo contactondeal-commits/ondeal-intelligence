@@ -1209,6 +1209,45 @@ model ExperimentVariant {
   @@map("experiment_variants")
 }
 
+// §61-65 "System Evolution Console" (06/09/2026) — pipeline d'auto-amélioration
+// RÉEL, jamais un badge décoratif : une hypothèse (repérée mécaniquement dans
+// les vraies statistiques du système, ou écrite par l'Owner) devient une VRAIE
+// CoderMission (Phase 3, réutilisée sans modification) qui édite le code,
+// compile, teste, construit — puis l'Owner RELIT le résultat réel avant toute
+// décision. L'IA ne peut structurellement PAS s'auto-accorder le droit de
+// livrer : `shippedPrUrl` n'est écrit QUE par evolution/ship.ts, appelé
+// UNIQUEMENT depuis une route protégée par requireCapabilityWithStepUp — même
+// principe que SystemPolicy (§"Owner Sovereignty").
+model EvolutionProposal {
+  id String @id @default(cuid())
+
+  // "SYSTEM_ANALYSIS" = détecté mécaniquement (AgentRegistry/Memory réels,
+  // jamais un signal inventé) ; "OWNER" = écrit directement par l'Owner.
+  source     String
+  hypothesis String // ce qui est proposé et pourquoi — texte réel, jamais un placeholder
+  targetArea String // ex. "supervisor", "connectors", "policy" — libre, jamais un enum figé prématurément
+
+  status String @default("PROPOSED")
+  // PROPOSED → MISSION_LAUNCHED → AWAITING_OWNER_REVIEW → (APPROVED | REJECTED) → (SHIPPED si APPROVED et livré)
+
+  coderMissionId String? @unique // CoderMission RÉELLE (Phase 3) qui implémente l'hypothèse — jamais un lien vers une exécution fictive
+
+  reviewedByUserId String?
+  reviewNote       String?
+  reviewedAt       DateTime?
+
+  shippedPrUrl    String? // renseigné UNIQUEMENT par evolution/ship.ts après une VRAIE création de PR GitHub
+  shippedBranch   String?
+  shippedAt       DateTime?
+
+  createdByUserId String? // Owner qui a écrit l'hypothèse (source=OWNER) — null si source=SYSTEM_ANALYSIS (aucun utilisateur humain à l'origine du texte)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@map("evolution_proposals")
+}
+
 // ============================================================================
 // OWNER STRONG AUTHENTICATION (06/09/2026, "DELIVERY CONDITION — OWNER
 // IDENTITY"). Couche SÉPARÉE et ADDITIONNELLE au-dessus de la session

@@ -198,6 +198,61 @@ export async function createPullRequest(params: { title: string; head: string; b
   return res.json();
 }
 
+function encodeContentPath(pathInRepo: string): string {
+  return pathInRepo.split("/").map(encodeURIComponent).join("/");
+}
+
+/**
+ * §61-65 "System Evolution Console" — lit le `sha` RÉEL d'un fichier sur une
+ * branche donnée (Contents API), nécessaire pour un PUT/DELETE ultérieur sur
+ * ce même fichier (l'API GitHub refuse une écriture sans le sha courant,
+ * garde native contre un écrasement concurrent). `null` si le fichier
+ * n'existe pas encore sur cette branche (cas normal pour un fichier créé par
+ * la mission) — jamais une exception pour ce cas attendu.
+ */
+export async function getFileShaOnBranch(pathInRepo: string, branch: string): Promise<string | null> {
+  const { token, repoFullName } = await requireCredentials();
+  const res = await githubFetch(token, `/repos/${repoFullName}/contents/${encodeContentPath(pathInRepo)}?ref=${encodeURIComponent(branch)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new GithubConnectorError(`Lecture du fichier "${pathInRepo}" (branche "${branch}") échouée (${res.status}).`);
+  const body = (await res.json()) as { sha: string };
+  return body.sha;
+}
+
+/**
+ * Écrit (crée ou remplace) RÉELLEMENT le contenu d'UN fichier sur UNE branche
+ * via l'API Contents — jamais un `git push` local (ce process n'a aucune
+ * copie du dépôt réel avec des credentials configurées). `sha` obligatoire
+ * pour remplacer un fichier existant (voir getFileShaOnBranch), absent pour
+ * une création.
+ */
+export async function putFileOnBranch(pathInRepo: string, branch: string, content: Buffer, message: string, sha?: string | null): Promise<void> {
+  const { token, repoFullName } = await requireCredentials();
+  const res = await githubFetch(token, `/repos/${repoFullName}/contents/${encodeContentPath(pathInRepo)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message, content: content.toString("base64"), branch, ...(sha ? { sha } : {}) }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new GithubConnectorError(`Écriture du fichier "${pathInRepo}" sur la branche "${branch}" échouée (${res.status}). ${detail}`.trim());
+  }
+}
+
+/** Supprime RÉELLEMENT un fichier sur une branche via l'API Contents — `sha` obligatoire (voir getFileShaOnBranch), jamais une suppression à l'aveugle sans connaître le contenu actuel. */
+export async function deleteFileOnBranch(pathInRepo: string, branch: string, message: string, sha: string): Promise<void> {
+  const { token, repoFullName } = await requireCredentials();
+  const res = await githubFetch(token, `/repos/${repoFullName}/contents/${encodeContentPath(pathInRepo)}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message, sha, branch }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new GithubConnectorError(`Suppression du fichier "${pathInRepo}" sur la branche "${branch}" échouée (${res.status}). ${detail}`.trim());
+  }
+}
+
 /**
  * §33 "durable runner" — déclenche RÉELLEMENT le workflow GitHub Actions
  * (.github/workflows/ai-lab-mission.yml) via workflow_dispatch. C'est le

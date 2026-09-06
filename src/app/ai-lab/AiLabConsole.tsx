@@ -15,7 +15,7 @@ import { callWithStepUp } from "@/app/ai-lab/stepUp";
  * connecteur NOT_CONFIGURED s'affiche tel quel, jamais masqué.
  */
 
-type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "policy" | "audit";
+type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "evolution" | "policy" | "audit";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "composer", label: "Composer" },
@@ -26,6 +26,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "agents", label: "Agents" },
   { id: "memory", label: "Memory" },
   { id: "experiments", label: "Experiments" },
+  { id: "evolution", label: "Evolution" },
   { id: "policy", label: "Owner Control Center" },
   { id: "audit", label: "Audit" },
 ];
@@ -224,6 +225,7 @@ export default function AiLabConsole({ ownerEmail }: { ownerEmail: string }) {
         {tab === "agents" && <AgentsTab onError={setError} />}
         {tab === "memory" && <MemoryTab onError={setError} />}
         {tab === "experiments" && <ExperimentsTab onError={setError} />}
+        {tab === "evolution" && <EvolutionTab onError={setError} />}
         {tab === "policy" && <PolicyTab policy={policy} onChanged={refreshPolicy} onError={setError} />}
         {tab === "audit" && <AuditTab onError={setError} />}
       </main>
@@ -1208,6 +1210,242 @@ function ExperimentsTab({ onError }: { onError: (e: string) => void }) {
                     </div>
                   ))}
               </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EVOLUTION — System Evolution Console réel (§61-65) : hypothèse → VRAIE
+// CoderMission → revue Owner → livraison réelle en Pull Request GitHub.
+// ---------------------------------------------------------------------------
+interface EvolutionProposalView {
+  id: string;
+  source: string;
+  hypothesis: string;
+  targetArea: string;
+  status: string;
+  coderMissionId: string | null;
+  coderMission: { id: string; status: string; lastError: string | null } | null;
+  reviewNote: string | null;
+  shippedPrUrl: string | null;
+  shippedBranch: string | null;
+  createdAt: string;
+}
+
+function EvolutionTab({ onError }: { onError: (e: string) => void }) {
+  const [proposals, setProposals] = useState<EvolutionProposalView[]>([]);
+  const [selected, setSelected] = useState<EvolutionProposalView | null>(null);
+  const [hypothesis, setHypothesis] = useState("");
+  const [targetArea, setTargetArea] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [detecting, setDetecting] = useState(false);
+  const [reviewNote, setReviewNote] = useState("");
+
+  const refresh = useCallback(() => {
+    callWithStepUp<{ proposals: EvolutionProposalView[] }>("/api/ai-lab/evolution/proposals")
+      .then((r) => setProposals(r.proposals))
+      .catch((e) => onError(String(e)));
+  }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function open(id: string) {
+    try {
+      const r = await callWithStepUp<{ proposal: EvolutionProposalView }>(`/api/ai-lab/evolution/proposals/${id}`);
+      setSelected(r.proposal);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function detectSignals() {
+    setDetecting(true);
+    try {
+      const r = await callWithStepUp<{ created: number; skippedExisting: number }>("/api/ai-lab/evolution/detect", { method: "POST" });
+      onError(`Scan de signaux terminé : ${r.created} nouvelle(s) proposition(s), ${r.skippedExisting} déjà couverte(s).`);
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  async function createProposal() {
+    setBusy(true);
+    try {
+      await callWithStepUp("/api/ai-lab/evolution/proposals", { method: "POST", body: JSON.stringify({ hypothesis, targetArea }) });
+      setHypothesis("");
+      setTargetArea("");
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function launch(id: string) {
+    setBusy(true);
+    try {
+      await callWithStepUp(`/api/ai-lab/evolution/proposals/${id}/launch`, { method: "POST" });
+      await open(id);
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function review(id: string, decision: "APPROVE" | "REJECT") {
+    setBusy(true);
+    try {
+      await callWithStepUp(`/api/ai-lab/evolution/proposals/${id}/review`, { method: "POST", body: JSON.stringify({ decision, note: reviewNote || undefined }) });
+      setReviewNote("");
+      await open(id);
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function ship(id: string) {
+    if (typeof window !== "undefined" && !window.confirm("Ouvrir réellement une Pull Request sur le dépôt GitHub connecté avec les changements de cette mission ? Cette action écrit sur un système externe.")) return;
+    setBusy(true);
+    try {
+      const r = await callWithStepUp<{ ship: { prUrl: string } }>(`/api/ai-lab/evolution/proposals/${id}/ship`, { method: "POST" });
+      onError(`Pull Request ouverte : ${r.ship.prUrl}`);
+      await open(id);
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "var(--space-5)" }}>
+      <div style={cardStyle}>
+        <h2 style={{ margin: 0, fontSize: 15 }}>System Evolution Console</h2>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>
+          Pipeline réel : hypothèse (détectée mécaniquement depuis l&apos;Agent Registry, ou écrite par vous) → VRAIE CoderMission (édite, compile, teste, construit) → votre revue du résultat réel → livraison en Pull Request GitHub uniquement après votre approbation explicite. Aucune étape n&apos;est franchie par l&apos;IA elle-même.
+        </p>
+        <button disabled={detecting} style={{ ...secondaryButtonStyle, marginTop: 10 }} onClick={detectSignals}>
+          {detecting ? "Analyse…" : "Analyser les signaux (Agent Registry)"}
+        </button>
+
+        <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 200px 140px", gap: 8, alignItems: "start" }}>
+          <textarea value={hypothesis} onChange={(e) => setHypothesis(e.target.value)} rows={2} placeholder='Hypothèse — ex. "Le rôle researcher échoue souvent faute de web search activé, ajouter une vérification explicite en amont."' style={{ ...inputStyle, resize: "vertical" }} />
+          <input value={targetArea} onChange={(e) => setTargetArea(e.target.value)} placeholder="Zone ciblée (ex. supervisor)" style={inputStyle} />
+          <button disabled={busy || !hypothesis.trim() || !targetArea.trim()} style={buttonStyle} onClick={createProposal}>
+            Proposer
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: "var(--space-5)" }}>
+        <div style={cardStyle}>
+          <h3 style={{ margin: 0, fontSize: 14 }}>Propositions ({proposals.length})</h3>
+          <div style={{ marginTop: 10, display: "grid", gap: 6, maxHeight: 560, overflowY: "auto" }}>
+            {proposals.map((p) => (
+              <button
+                key={p.id}
+                onClick={() => open(p.id)}
+                style={{ textAlign: "left", background: selected?.id === p.id ? "var(--color-surface-alt)" : "transparent", border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: 8, cursor: "pointer", color: "var(--color-text)" }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.targetArea}</div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <Badge tone={healthTone(p.status)}>{p.status}</Badge>
+                  <span style={{ fontSize: 11, color: "var(--color-text-faint)" }}>{p.source === "SYSTEM_ANALYSIS" ? "détecté" : "Owner"}</span>
+                </div>
+              </button>
+            ))}
+            {proposals.length === 0 && <p style={{ fontSize: 12, color: "var(--color-text-faint)" }}>Aucune proposition encore.</p>}
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          {!selected && <p style={{ color: "var(--color-text-faint)" }}>Sélectionnez une proposition.</p>}
+          {selected && (
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 15 }}>{selected.targetArea}</h3>
+                  <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
+                    <Badge tone={healthTone(selected.status)}>{selected.status}</Badge>
+                    <span style={{ fontSize: 12, color: "var(--color-text-faint)" }}>{selected.source === "SYSTEM_ANALYSIS" ? "Détecté mécaniquement" : "Écrit par l'Owner"}</span>
+                  </div>
+                </div>
+                {selected.status === "PROPOSED" && (
+                  <button disabled={busy} style={buttonStyle} onClick={() => launch(selected.id)}>
+                    Lancer la CoderMission
+                  </button>
+                )}
+              </div>
+
+              <p style={{ fontSize: 13, color: "var(--color-text-muted)", marginTop: 12, whiteSpace: "pre-wrap" }}>{selected.hypothesis}</p>
+
+              {selected.coderMission && (
+                <div style={{ marginTop: 12, padding: 10, border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)" }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <strong style={{ fontSize: 12 }}>CoderMission {selected.coderMission.id}</strong>
+                    <Badge tone={healthTone(selected.coderMission.status)}>{selected.coderMission.status}</Badge>
+                  </div>
+                  {selected.coderMission.lastError && <p style={{ fontSize: 12, color: "var(--color-danger)", marginTop: 6 }}>{selected.coderMission.lastError}</p>}
+                  {["QUEUED", "RUNNING"].includes(selected.coderMission.status) && (
+                    <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 6 }}>
+                      Exécutez <code>tsx scripts/run-coder-mission.ts --mission {selected.coderMission.id} --repo . --path / --page-description &quot;…&quot;</code> depuis un environnement de développement, ou déclenchez le workflow GitHub Actions <code>coder-mission.yml</code> (onglet Actions du dépôt) — l&apos;exécution réelle (checkout git, Chromium) reste hors Vercel.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {selected.status === "AWAITING_OWNER_REVIEW" && (
+                <div style={{ marginTop: 12, padding: 10, border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)" }}>
+                  <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                    Note de revue (optionnelle)
+                    <textarea value={reviewNote} onChange={(e) => setReviewNote(e.target.value)} rows={2} style={{ ...inputStyle, marginTop: 4, resize: "vertical" }} />
+                  </label>
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <button disabled={busy || selected.coderMission?.status !== "SUCCEEDED"} style={buttonStyle} onClick={() => review(selected.id, "APPROVE")} title={selected.coderMission?.status !== "SUCCEEDED" ? "Approbation impossible : la mission n'a pas réussi" : undefined}>
+                      Approuver
+                    </button>
+                    <button disabled={busy} style={{ ...secondaryButtonStyle, color: "var(--color-danger)" }} onClick={() => review(selected.id, "REJECT")}>
+                      Rejeter
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {selected.status === "APPROVED" && (
+                <div style={{ marginTop: 12 }}>
+                  <button disabled={busy} style={buttonStyle} onClick={() => ship(selected.id)}>
+                    Livrer réellement (ouvrir la Pull Request GitHub)
+                  </button>
+                </div>
+              )}
+
+              {selected.status === "SHIPPED" && selected.shippedPrUrl && (
+                <p style={{ fontSize: 13, color: "var(--color-success)", marginTop: 12 }}>
+                  Livré — Pull Request réelle :{" "}
+                  <a href={selected.shippedPrUrl} target="_blank" rel="noreferrer" style={{ color: "inherit" }}>
+                    {selected.shippedPrUrl}
+                  </a>{" "}
+                  (branche {selected.shippedBranch})
+                </p>
+              )}
+
+              {selected.reviewNote && <p style={{ fontSize: 12, color: "var(--color-text-faint)", marginTop: 10 }}>Note de revue : {selected.reviewNote}</p>}
             </div>
           )}
         </div>

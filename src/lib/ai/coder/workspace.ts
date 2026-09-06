@@ -72,6 +72,21 @@ export interface MissionWorkspace {
 }
 
 /**
+ * §61-65 "System Evolution Console" (06/09/2026) : chemin du workspace d'une
+ * mission, SANS le créer ni vérifier qu'il existe — réutilisé par
+ * evolution/ship.ts pour retrouver (si encore présent sur ce filesystem, dans
+ * la fenêtre de 2h avant reapStaleWorkspaces) les fichiers RÉELLEMENT édités
+ * par une CoderMission déjà terminée, pour les livrer en Pull Request. Seule
+ * fonction exportée qui connaisse ce calcul de chemin — jamais dupliqué.
+ */
+export function getMissionWorkspaceRoot(missionId: string): string {
+  if (!/^[a-zA-Z0-9_-]+$/.test(missionId)) {
+    throw new Error(`missionId invalide (caractères non alphanumériques) : "${missionId}".`);
+  }
+  return path.join(WORKSPACE_ROOT_PREFIX, missionId);
+}
+
+/**
  * Copie `sourceRepoRoot` vers un répertoire temporaire dédié à `missionId`,
  * en excluant tout secret/état lourd (voir EXCLUDED_TOP_LEVEL), puis
  * initialise un dépôt git propre avec un commit "baseline" — jamais une
@@ -79,10 +94,7 @@ export interface MissionWorkspace {
  * configurés localement).
  */
 export async function createMissionWorkspace(missionId: string, sourceRepoRoot: string): Promise<MissionWorkspace> {
-  if (!/^[a-zA-Z0-9_-]+$/.test(missionId)) {
-    throw new Error(`missionId invalide (caractères non alphanumériques) : "${missionId}".`);
-  }
-  const root = path.join(WORKSPACE_ROOT_PREFIX, missionId);
+  const root = getMissionWorkspaceRoot(missionId);
   await fs.rm(root, { recursive: true, force: true });
   await fs.mkdir(root, { recursive: true });
 
