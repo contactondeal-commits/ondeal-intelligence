@@ -9,6 +9,10 @@ describe("actionKindFor — AUTOMATED ACTION vs MANUAL MISSION", () => {
     // schéma/SENSITIVE_ACTION_TYPES mais aucune mutation n'existait encore.
     expect(actionKindFor("update_stock")).toBe("automated_mutation");
   });
+  
+  it("classe set_product_status comme automated_mutation (correctif 05/09/2026 v4 — Archiver/Republier depuis la fiche produit)", () => {
+    expect(actionKindFor("set_product_status")).toBe("automated_mutation");
+  });
 
   it("classe les types sans mutation réelle comme manual_mission (jamais présenté comme une vraie exécution)", () => {
     expect(actionKindFor("review_supplier")).toBe("manual_mission");
@@ -35,6 +39,22 @@ describe("criticalTargetKey — conflit entre deux ActionItems ciblant la même 
   it("deux recommandations sur DEUX variantes DIFFÉRENTES du même produit ne conflictent jamais (cas 5 — pas de blocage inutile)", () => {
     const keyA = criticalTargetKey("update_price", { variantId: "v1", productId: "p1" }, "p1");
     const keyB = criticalTargetKey("update_price", { variantId: "v2", productId: "p1" }, "p1");
+    expect(keyA).not.toBe(keyB);
+  });
+  it("set_product_status : deux clics sur le MÊME produit produisent la MÊME clé (conflit détecté — un seul changement de statut actif à la fois)", () => {
+    const keyA = criticalTargetKey("set_product_status", { productId: "p1", targetStatus: "ARCHIVED" }, "p1");
+    const keyB = criticalTargetKey("set_product_status", { productId: "p1", targetStatus: "ACTIVE" }, "p1");
+    expect(keyA).not.toBeNull();
+    // Même clé quel que soit le statut cible visé : c'est la DONNÉE (le
+    // statut de publication du produit) qui est critique, pas la valeur
+    // demandée — deux clics contradictoires sur le même produit doivent se
+    // bloquer l'un l'autre, pas être traités comme deux actions distinctes.
+    expect(keyA).toBe(keyB);
+  });
+
+  it("set_product_status sur DEUX produits différents ne conflictent jamais entre eux", () => {
+    const keyA = criticalTargetKey("set_product_status", { productId: "p1", targetStatus: "ARCHIVED" }, "p1");
+    const keyB = criticalTargetKey("set_product_status", { productId: "p2", targetStatus: "ARCHIVED" }, "p2");
     expect(keyA).not.toBe(keyB);
   });
 
