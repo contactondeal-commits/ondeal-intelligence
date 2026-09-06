@@ -25,7 +25,7 @@ import {
 } from "@/lib/ai/supervisor/graphStore";
 import { buildWorldState } from "@/lib/ai/supervisor/worldState";
 import { buildCatalogue, type SpecialistCatalogue } from "@/lib/ai/supervisor/catalogue";
-import { PLANNING_TASK_SET, callStructuredSpecialist, instructionPlanSchema, planSchema } from "@/lib/ai/supervisor/specialists";
+import { JSON_INTEGRITY_INSTRUCTION, PLANNING_TASK_SET, callStructuredSpecialist, instructionPlanSchema, planSchema } from "@/lib/ai/supervisor/specialists";
 import type { GraphNodeSpec, NodeExecutionResult, SpecialistContract, SpecialistOutput, WorldState } from "@/lib/ai/supervisor/types";
 import { evaluatePolicy, type PolicyContext } from "@/lib/ai/policy/engine";
 import { appendAuditLog } from "@/lib/ai/policy/audit";
@@ -184,6 +184,17 @@ async function planInitialGraph(
     // relevé (voir maxTokens de l'appel plus bas) reste une marge de
     // sécurité, jamais un pansement isolé.
     `IMPÉRATIF DE BRIÈVETÉ (cause réelle d'une troncature de production précédente) : "findings" = AU PLUS 3 phrases courtes (une ligne chacune, jamais un paragraphe). "evidence" = AU PLUS 3 éléments courts (une ligne chacun — pas d'objet détaillé avec justification longue). "uncertainties"/"recommendations" = 0 à 2 éléments courts, ou tableau vide. Le contenu qui compte réellement pour l'exécution de la mission est "data.nodes" — ne JAMAIS laisser "findings"/"evidence" consommer le budget de sortie au détriment d'un plan de nodes complet et correctement fermé en JSON.`,
+    // CORRECTIF (06/09/2026, 6e panne réelle de la même chaîne, observée EN
+    // PRODUCTION après le correctif de brièveté ci-dessus : "bloc Markdown
+    // fermé détecté mais son contenu n'est pas un JSON valide", stop_reason
+    // du provider ≠ "max_tokens" — donc PAS une troncature de budget cette
+    // fois, une réponse terminée normalement mais syntaxiquement invalide.
+    // Cause la plus plausible : le WORLD STATE ci-dessous (JSON.stringify
+    // pretty-printé, avec ses propres guillemets/accolades/retours à la
+    // ligne) recopié tel quel par le modèle à l'intérieur d'un "objective"
+    // détaillé (chaque node énumère souvent des chemins réels du dépôt) —
+    // une seule chaîne mal ré-échappée invalide toute la réponse.
+    JSON_INTEGRITY_INSTRUCTION,
   ].join("\n");
   // §57-60 "Persistent Memory" (06/09/2026) : rappel RÉEL des échecs et
   // succès passés pertinents (filtre mécanique par mots-clés du goal — voir
@@ -259,6 +270,10 @@ async function planNodesForInstruction(
     // troncature avant "data.nodes" si le modèle traite findings/evidence
     // comme une synthèse narrative complète plutôt qu'un résumé bref.
     `IMPÉRATIF DE BRIÈVETÉ (même cause racine que le plan initial) : "findings" = AU PLUS 3 phrases courtes. "evidence" = AU PLUS 3 éléments courts. "uncertainties"/"recommendations" = 0 à 2 éléments courts. "data.nodes" est la seule partie réellement exploitée par le code — ne jamais la sacrifier à une prose longue dans findings/evidence.`,
+    // Même correctif que planInitialGraph ci-dessus (6e panne réelle) : le
+    // WORLD STATE injecté ci-dessous est un JSON.stringify pretty-printé —
+    // ne jamais le recopier tel quel dans une chaîne de la réponse.
+    JSON_INTEGRITY_INSTRUCTION,
   ].join("\n");
   const userMessage = [
     `OBJECTIF GLOBAL DE LA MISSION : ${goal}`,

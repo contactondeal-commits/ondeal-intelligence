@@ -175,6 +175,26 @@ describe("extractJson — root cause réelle (fence non ancré + troncature max_
     const provider = fakeProvider(envelope({ verdict: "PASS" })); // rejectionCase manquant
     await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema)).rejects.toThrow(/rôle/);
   });
+
+  /**
+   * RÉGRESSION — CORRECTIF ARCHITECTURAL (06/09/2026, 6e panne réelle) :
+   * `stopReason` (2e paramètre) et l'erreur JSON.parse RÉELLE étaient
+   * auparavant totalement absents de tout message d'erreur d'extractJson —
+   * la seule preuve disponible pour distinguer "troncature confirmée par
+   * max_tokens" de "réponse terminée normalement mais syntaxiquement
+   * invalide" (exactement la question posée par l'Owner sur la 6e panne).
+   * Verrouille que ces deux informations sont désormais TOUJOURS présentes,
+   * jamais swallow silencieusement.
+   */
+  it("surface désormais le stop_reason réel ET l'erreur JSON.parse exacte dans CHAQUE branche d'échec — jamais swallow (6e panne réelle)", () => {
+    // Branche 2 (fence fermé, contenu invalide).
+    expect(() => extractJson('```json\n{"a": INVALID}\n```', "end_turn")).toThrow(/stop_reason.*"end_turn"|"end_turn".*stop_reason/is);
+    expect(() => extractJson('```json\n{"a": INVALID}\n```', "end_turn")).toThrow(/Erreur JSON\.parse exacte/);
+    // Branche 3 (fence ouvert jamais refermé).
+    expect(() => extractJson('```json\n{"a": 1, "b":', "end_turn")).toThrow(/stop_reason.*"end_turn"|"end_turn".*stop_reason/is);
+    // Branche 4 (ni JSON brut, ni fence).
+    expect(() => extractJson("prose seule, jamais un JSON", null)).toThrow(/stop_reason.*"non rapporté"|"non rapporté".*stop_reason/is);
+  });
 });
 
 /**
@@ -258,13 +278,68 @@ describe("callStructuredSpecialist — détection de troncature via stop_reason 
     expect(generate).toHaveBeenCalledTimes(4);
   });
 
-  it("filet de sécurité conservé : un provider qui NE rapporte PAS stop_reason (undefined) retombe sur l'heuristique existante d'extractJson (fence ouvert non refermé) — AUCUNE reprise déclenchée à tort (le signal ne dit jamais explicitement 'max_tokens')", async () => {
+  it("filet de sécurité RÉVISÉ (6e panne réelle, 06/09/2026) : un provider qui NE rapporte PAS stop_reason=max_tokens (undefined ou toute autre valeur) et dont l'heuristique d'extractJson échoue tombe désormais sur UNE SEULE reprise dédiée (consigne d'intégrité JSON, jamais une consigne de troncature non confirmée) — jamais plus d'une reprise au total, jamais une réparation du texte déjà reçu", async () => {
+    // AVANT ce correctif, ce cas s'arrêtait après 1 seul appel (jamais de
+    // reprise), ce qui laissait TOUTE panne non explicitement signalée
+    // "max_tokens" par le provider directement fatale — gap exact révélé
+    // par la 6e panne réelle (fence FERMÉ, stop_reason ≠ "max_tokens", JSON
+    // invalide malgré tout). La reprise ci-dessous n'est JAMAIS présentée
+    // comme une troncature confirmée (elle ne l'est pas) — un message
+    // distinct, honnête, est envoyé au modèle.
     const truncatedNoSignal = '```json\n{ "findings": [ "a"';
-    const generate = vi.fn(async (_req: GenerateRequest): Promise<GenerateResult> => ({ text: truncatedNoSignal, citations: [], tokensIn: 500, tokensOut: 400 }));
+    const completeText = envelope({ verdict: "PASS", blockingIssues: [], weaknesses: [], rejectionCase: "x" });
+    let callCount = 0;
+    const generate = vi.fn(async (_req: GenerateRequest): Promise<GenerateResult> => {
+      callCount++;
+      if (callCount === 1) return { text: truncatedNoSignal, citations: [], tokensIn: 500, tokensOut: 400 };
+      return { text: completeText, citations: [], tokensIn: 300, tokensOut: 150, stopReason: "end_turn" };
+    });
     const provider = providerWithGenerate(generate);
 
-    await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000)).rejects.toThrow(/JSON valide/);
-    expect(generate).toHaveBeenCalledTimes(1); // aucune reprise déclenchée : stop_reason n'a jamais dit "max_tokens".
+    const result = await callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000);
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(result.output.data.verdict).toBe("PASS");
+    const secondCallArgs = generate.mock.calls[1]![0] as GenerateRequest;
+    // La reprise doit porter la consigne d'INTÉGRITÉ JSON — jamais la
+    // consigne de troncature (§ci-dessus), qui affirmerait à tort une
+    // cause non confirmée par le provider.
+    expect(secondCallArgs.system).toMatch(/INTÉGRITÉ JSON/);
+    expect(secondCallArgs.system).not.toMatch(/TRONQUÉE/);
+  });
+
+  it("REPRODUCTION EXACTE de la 6e panne réelle (06/09/2026) : bloc Markdown FERMÉ mais contenu non-JSON, stop_reason ≠ \"max_tokens\" — refusé sans reprise inutile si la reprise échoue ELLE AUSSI, message final citant stop_reason ET l'erreur JSON.parse réelle (jamais swallow)", async () => {
+    // Fence exactement fermé (```json ... ```, rien avant/après) mais dont
+    // le contenu n'est PAS un JSON valide — exactement le symptôme rapporté
+    // par l'Owner : "bloc Markdown fermé détecté mais son contenu n'est pas
+    // un JSON valide", stop_reason="end_turn" (jamais "max_tokens").
+    const closedFenceInvalidJson = '```json\n{ "findings": ["a"], "evidence": [], "uncertainties": [], "recommendations": [], "confidence": 0.9, "data": { "verdict": "PASS" INVALID_TRAILING }\n```';
+    const generate = vi.fn(async (_req: GenerateRequest): Promise<GenerateResult> => ({
+      text: closedFenceInvalidJson,
+      citations: [],
+      tokensIn: 500,
+      tokensOut: 400,
+      stopReason: "end_turn",
+    }));
+    const provider = providerWithGenerate(generate);
+
+    await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000)).rejects.toThrow(
+      /MÊME APRÈS une reprise/,
+    );
+    // Exactement 2 tentatives : le premier appel + LA SEULE reprise autorisée — jamais une 3e.
+    expect(generate).toHaveBeenCalledTimes(2);
+    try {
+      await callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000);
+      expect.unreachable("devait lever");
+    } catch (err) {
+      const message = (err as Error).message;
+      // Le message final doit citer le stop_reason RÉEL (jamais swallow) ET
+      // l'erreur JSON.parse exacte des DEUX tentatives (jamais un message
+      // générique qui masquerait la cause).
+      expect(message).toMatch(/end_turn/);
+      expect(message).toMatch(/Erreur avant reprise/);
+      expect(message).toMatch(/Erreur après reprise/);
+    }
   });
 
   it("faux positif évité (§10 du mandat) : une réponse VALIDE et COMPLÈTE proche de la limite de tokens, avec un stop_reason autre que max_tokens, n'est JAMAIS reprise inutilement", async () => {

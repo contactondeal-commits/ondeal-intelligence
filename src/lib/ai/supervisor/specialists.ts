@@ -156,6 +156,31 @@ export const CONCISE_ENVELOPE_INSTRUCTION =
   `IMPÉRATIF DE BRIÈVETÉ (cause réelle de plusieurs troncatures de production précédentes) : "findings" = AU PLUS 3 phrases courtes (une ligne chacune, jamais un paragraphe). "evidence" = AU PLUS 3 éléments courts (une ligne chacun — pas d'objet détaillé avec justification longue). "uncertainties"/"recommendations" = 0 à 3 éléments courts. Le champ "data" est la seule partie réellement exploitée par le code — ne JAMAIS laisser findings/evidence consommer le budget de sortie au détriment d'un "data" complet et correctement fermé en JSON.`;
 
 /**
+ * §"INTÉGRITÉ JSON" — CORRECTIF ARCHITECTURAL (06/09/2026, 6e panne réelle) :
+ * une nouvelle exécution réelle en production a échoué avec "bloc Markdown
+ * fermé détecté mais son contenu n'est pas un JSON valide" — DIFFÉRENT des
+ * pannes 4/5 (troncature par max_tokens) : le bloc fence était bien FERMÉ
+ * (```...```, ancré sur l'ENSEMBLE du texte — voir extractJson) et le
+ * `stop_reason` réel du provider pour cette réponse N'ÉTAIT PAS "max_tokens"
+ * (sinon la reprise dédiée à la troncature, ci-dessous, aurait DÉJÀ
+ * intercepté le cas AVANT extractJson) — le modèle a donc terminé sa
+ * génération de lui-même en produisant un JSON syntaxiquement invalide,
+ * jamais une coupure de budget. Cause la plus plausible, compte tenu du
+ * contenu réellement injecté dans les prompts (World State/évidence
+ * pretty-printé via JSON.stringify, cf. factsBlock/graphRunner.ts) : le
+ * modèle recopie un extrait brut (guillemets, retours à la ligne, structure
+ * imbriquée) directement dans une chaîne "findings"/"evidence"/"objective"
+ * sans le ré-échapper correctement — un piège d'échappement JSON connu,
+ * jamais une supposition à l'aveugle ici : cette instruction attaque
+ * directement la cause la plus probable (jamais recopier tel quel), et
+ * l'erreur levée par extractJson (voir plus bas) rapporte désormais le
+ * `stop_reason` réel ET le message exact de JSON.parse — jamais swallow —
+ * pour confirmer/infirmer cette hypothèse sur la prochaine exécution réelle.
+ */
+export const JSON_INTEGRITY_INSTRUCTION =
+  `IMPÉRATIF D'INTÉGRITÉ JSON (cause probable d'un échec de production réel) : ne JAMAIS copier un extrait brut (guillemets, retours à la ligne, accolades) du World State ou d'une pièce jointe directement à l'intérieur d'une chaîne "findings"/"evidence"/"objective"/"uncertainties"/"recommendations" — PARAPHRASE toujours en prose simple, sans guillemets ni structure imbriquée non échappée. Une seule chaîne mal échappée invalide l'ENSEMBLE de la réponse JSON — jamais un raccourci qui vaille la peine.`;
+
+/**
  * CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : plafond de reprise
  * — largement sous la limite officielle de sortie de claude-haiku-4-5 (64 000
  * tokens, cf. platform.claude.com/docs/en/models/haiku-4-5/overview, vérifié
@@ -164,14 +189,31 @@ export const CONCISE_ENVELOPE_INSTRUCTION =
  */
 const MAX_RETRY_TOKENS = 16_000;
 
-export function extractJson(text: string): unknown {
+/**
+ * CORRECTIF ARCHITECTURAL (06/09/2026, 6e panne réelle) : `stopReason` ajouté
+ * en second paramètre — jamais utilisé pour DÉCIDER quoi que ce soit ici
+ * (extractJson reste un pur parseur, la décision de reprise reste dans
+ * callStructuredSpecialist), UNIQUEMENT pour l'INCLURE, tel quel, dans
+ * chaque message d'erreur — jusqu'ici totalement absent des messages
+ * d'échec, alors que c'est le SEUL signal qui distingue "troncature
+ * confirmée par le budget de tokens" de "réponse terminée normalement mais
+ * syntaxiquement invalide" (la 6e panne réelle est de cette seconde
+ * catégorie). Chaque `catch` capture aussi désormais le message RÉEL de
+ * `JSON.parse` (auparavant swallow silencieusement, §"ne jamais masquer
+ * l'erreur") — la position exacte qu'il rapporte (ex. "Unexpected token ...
+ * at position N") est la preuve la plus directe de la cause exacte.
+ */
+export function extractJson(text: string, stopReason?: string | null): unknown {
   const trimmed = text.trim();
   const preview = () => text.slice(0, 2000);
+  const stopReasonNote = `stop_reason réel du provider pour cette réponse : "${stopReason ?? "non rapporté"}"`;
 
   // 1. JSON brut, sans fence Markdown.
+  let rawParseError: string | null = null;
   try {
     return JSON.parse(trimmed);
-  } catch {
+  } catch (err) {
+    rawParseError = err instanceof Error ? err.message : String(err);
     // continue vers les formes fence ci-dessous — jamais un abandon silencieux ici.
   }
 
@@ -181,9 +223,10 @@ export function extractJson(text: string): unknown {
     const inner = closedFence[1]!.trim();
     try {
       return JSON.parse(inner);
-    } catch {
+    } catch (err) {
+      const parseErrMessage = err instanceof Error ? err.message : String(err);
       throw new Error(
-        `Sortie spécialiste : bloc Markdown fermé détecté mais son contenu n'est pas un JSON valide — refus (jamais un verdict inventé/réparé). Texte reçu (2000 premiers caractères) : ${preview()}`,
+        `Sortie spécialiste : bloc Markdown fermé détecté mais son contenu n'est pas un JSON valide — refus (jamais un verdict inventé/réparé). ${stopReasonNote} (≠ "max_tokens" attendu ici signifierait une réponse terminée normalement mais syntaxiquement invalide, PAS une troncature de budget). Erreur JSON.parse exacte : ${parseErrMessage}. Texte reçu (2000 premiers caractères) : ${preview()}`,
       );
     }
   }
@@ -195,17 +238,22 @@ export function extractJson(text: string): unknown {
     const looksUnclosed = !withoutOpenMarker.includes("```");
     try {
       return JSON.parse(withoutOpenMarker.trim());
-    } catch {
+    } catch (err) {
+      const parseErrMessage = err instanceof Error ? err.message : String(err);
       const hint = looksUnclosed
         ? " Le bloc Markdown n'est JAMAIS refermé dans la réponse reçue — signature typique d'une réponse TRONQUÉE PAR LA LIMITE DE TOKENS (max_tokens) avant la fin du JSON : augmenter maxTokens pour ce rôle est le correctif attendu, jamais une réparation du JSON partiel."
         : "";
-      throw new Error(`Sortie spécialiste : pas un JSON valide — refus (jamais un JSON deviné/réparé).${hint} Texte reçu (2000 premiers caractères) : ${preview()}`);
+      throw new Error(
+        `Sortie spécialiste : pas un JSON valide — refus (jamais un JSON deviné/réparé).${hint} ${stopReasonNote}. Erreur JSON.parse exacte : ${parseErrMessage}. Texte reçu (2000 premiers caractères) : ${preview()}`,
+      );
     }
   }
 
   // 4. Ni JSON brut valide, ni fence — refus explicite (JSON syntaxiquement
   //    invalide, ou prose mélangée à du JSON sans fence).
-  throw new Error(`Sortie spécialiste : pas un JSON valide — refus (jamais un verdict inventé). Texte reçu (2000 premiers caractères) : ${preview()}`);
+  throw new Error(
+    `Sortie spécialiste : pas un JSON valide — refus (jamais un verdict inventé). ${stopReasonNote}. Erreur JSON.parse exacte (tentative brute) : ${rawParseError}. Texte reçu (2000 premiers caractères) : ${preview()}`,
+  );
 }
 
 export interface StructuredSpecialistResult<T> {
@@ -286,17 +334,61 @@ export async function callStructuredSpecialist<T>(
   // Une SEULE reprise contrôlée est tentée — jamais une boucle non bornée,
   // jamais une réparation du JSON partiel déjà reçu : budget doublé
   // (plafonné à MAX_RETRY_TOKENS) + rappel explicite de concision.
+  let retried = false;
   if (result.stopReason === "max_tokens") {
     const retryTokens = Math.min(maxTokens * 2, MAX_RETRY_TOKENS);
     const retrySystem = `${system}\n\n${CONCISE_ENVELOPE_INSTRUCTION}\n\nRAPPEL CRITIQUE : ta réponse précédente a été TRONQUÉE par la limite de tokens avant la fin du JSON (confirmé par le provider — stop_reason=max_tokens). Cette fois, réponds de façon NETTEMENT plus concise afin que le JSON complet, correctement fermé, tienne dans le budget alloué (${retryTokens} tokens) — jamais un JSON partiel, jamais une troncature répétée.`;
     result = await attempt(retryTokens, retrySystem);
     attemptsForTokens.push(result);
+    retried = true;
     if (result.stopReason === "max_tokens") {
       throw new Error(
         `Sortie spécialiste tronquée par la limite de tokens (confirmé par le provider — stop_reason=max_tokens) MÊME APRÈS une reprise avec un budget doublé (${retryTokens} tokens) et une consigne de concision explicite — refus (jamais un JSON partiel réparé ou deviné). Texte reçu (2000 premiers caractères) : ${result.text.slice(0, 2000)}`,
       );
     }
   }
+
+  /**
+   * CORRECTIF ARCHITECTURAL (06/09/2026, 6e panne réelle) : une exécution
+   * réelle en production a échoué avec "bloc Markdown fermé détecté mais
+   * son contenu n'est pas un JSON valide" — le fence était bien FERMÉ et
+   * `stop_reason` N'ÉTAIT PAS "max_tokens" (sinon la branche ci-dessus
+   * aurait déjà agi AVANT d'atteindre extractJson) : donc PAS une
+   * troncature confirmée par le budget de tokens, mais une réponse
+   * terminée normalement et néanmoins syntaxiquement invalide (voir
+   * JSON_INTEGRITY_INSTRUCTION ci-dessus pour la cause la plus probable).
+   * L'ancien code laissait cette catégorie d'échec directement fatale,
+   * SANS AUCUNE reprise (contrairement à la troncature par max_tokens) —
+   * gap corrigé ici : UNE SEULE reprise supplémentaire est tentée, avec une
+   * consigne explicite d'intégrité JSON, jamais une réparation du texte déjà
+   * reçu (on redemande une réponse fraîche) — et JAMAIS une 2e reprise si la
+   * troncature par max_tokens a DÉJÀ consommé la seule reprise autorisée
+   * (`retried` déjà vrai) : toujours au plus UNE reprise par appel, quelle
+   * que soit la cause, jamais une boucle non bornée.
+   */
+  let parsed: unknown;
+  try {
+    parsed = extractJson(result.text, result.stopReason);
+  } catch (err) {
+    if (retried) {
+      throw new Error(
+        `Sortie spécialiste : JSON toujours invalide même après la reprise déjà tentée pour troncature confirmée (stop_reason=max_tokens) — refus (jamais un JSON réparé/deviné, jamais une 2e reprise). ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const retryTokens = Math.min(maxTokens * 2, MAX_RETRY_TOKENS);
+    const retrySystem = `${system}\n\n${CONCISE_ENVELOPE_INSTRUCTION}\n\n${JSON_INTEGRITY_INSTRUCTION}\n\nRAPPEL CRITIQUE : ta réponse précédente n'était PAS un JSON valide (stop_reason rapporté par le provider : "${result.stopReason ?? "non rapporté"}" — donc PAS une troncature confirmée par la limite de tokens : une erreur de format). Cette fois, produis un JSON strictement valide et correctement échappé, sans jamais recopier un extrait brut entre guillemets depuis le contexte fourni.`;
+    result = await attempt(retryTokens, retrySystem);
+    attemptsForTokens.push(result);
+    retried = true;
+    try {
+      parsed = extractJson(result.text, result.stopReason);
+    } catch (err2) {
+      throw new Error(
+        `Sortie spécialiste : JSON invalide MÊME APRÈS une reprise avec consigne explicite d'intégrité JSON — refus (jamais un JSON réparé/deviné, jamais une 2e reprise). Erreur avant reprise : ${err instanceof Error ? err.message : String(err)}. Erreur après reprise (stop_reason="${result.stopReason ?? "non rapporté"}") : ${err2 instanceof Error ? err2.message : String(err2)}`,
+      );
+    }
+  }
+
   const totalTokensIn = attemptsForTokens.every((a) => a.tokensIn != null) ? attemptsForTokens.reduce((sum, a) => sum + a.tokensIn!, 0) : null;
   const totalTokensOut = attemptsForTokens.every((a) => a.tokensOut != null) ? attemptsForTokens.reduce((sum, a) => sum + a.tokensOut!, 0) : null;
 
@@ -306,10 +398,14 @@ export async function callStructuredSpecialist<T>(
   // catalogue, jamais les candidats de failover). Ne JAMAIS rapporter
   // `choice.provider`/`choice.model` quand `servedBy` dit autre chose —
   // ce serait un mensonge d'observabilité (§21 "MISSION BELONGS TO ONDEAL",
-  // §32 "jamais un fallback muet").
+  // §32 "jamais un fallback muet"). Calculé ICI (après la résolution
+  // complète de `parsed`, ci-dessus) — jamais avant : `result` peut avoir
+  // été réassigné par la reprise d'intégrité JSON ci-dessus, un calcul
+  // antérieur aurait rapporté le candidat de la tentative REJETÉE, jamais
+  // celle qui a réellement fourni le JSON retenu (même piège que §22-32).
   const actualProvider = result.servedBy?.provider ?? choice.provider;
   const actualModel = result.servedBy?.model ?? choice.model;
-  const parsed = extractJson(result.text);
+
   const envelope = specialistEnvelopeSchema.safeParse(parsed);
   if (!envelope.success) {
     throw new Error(`Sortie spécialiste non conforme à l'enveloppe attendue (findings/evidence/uncertainties/recommendations/confidence/data) : ${envelope.error.message}`);
@@ -356,7 +452,7 @@ export async function callStructuredSpecialist<T>(
  * rôles tronquait ensuite au même titre.
  */
 export function analystSystemPrompt(role: string, focus: string): string {
-  return `Tu es le spécialiste "${role}" d'OnDeal AI (Supervisor, PHASE 4). Analyse le contexte fourni selon cet angle : ${focus}. Réponds STRICTEMENT en JSON : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{}}. "evidence" doit citer des éléments RÉELS du contexte fourni (jamais une généralité sans ancrage). "uncertainties" doit lister explicitement ce qui manque plutôt que d'être vide par complaisance (§15). Aucun dark pattern (§21). Aucun chiffre de conversion inventé (§20/§77).\n${CONCISE_ENVELOPE_INSTRUCTION}`;
+  return `Tu es le spécialiste "${role}" d'OnDeal AI (Supervisor, PHASE 4). Analyse le contexte fourni selon cet angle : ${focus}. Réponds STRICTEMENT en JSON : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{}}. "evidence" doit citer des éléments RÉELS du contexte fourni (jamais une généralité sans ancrage). "uncertainties" doit lister explicitement ce qui manque plutôt que d'être vide par complaisance (§15). Aucun dark pattern (§21). Aucun chiffre de conversion inventé (§20/§77).\n${CONCISE_ENVELOPE_INSTRUCTION}\n${JSON_INTEGRITY_INSTRUCTION}`;
 }
 
 export { analysisDataSchema };
