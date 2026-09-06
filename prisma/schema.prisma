@@ -909,6 +909,15 @@ model StorefrontMission {
   storeId       String? // optionnel : boutique RÉELLE ciblée si la mission utilise Store Data/Shopify/GA4/Judge.me/CJ — null pour une mission pure code/recherche qui ne porte sur aucune boutique précise
   forcedModel   String? // §"Model Console" FORCE MODEL — Owner uniquement, jamais auto-défini par le Supervisor
 
+  // §11 "ADD INSTRUCTION DURING MISSION" (mandat complétion, 06/09/2026) —
+  // pendingInstruction est consommé (remis à null) au TOUT DÉBUT de
+  // l'itération de boucle suivante (graphRunner.ts), qui l'injecte dans le
+  // WorldState comme un fait OWNER_INSTRUCTION et déclenche un re-planning
+  // réel — jamais un simple log ignoré. instructionsJson conserve
+  // l'historique complet (jamais réécrit), pour l'audit et l'UI Timeline.
+  pendingInstruction String?
+  instructionsJson   String?
+
   store       Store?                      @relation(fields: [storeId], references: [id], onDelete: SetNull)
   nodes       StorefrontMissionNode[]
   artifacts   StorefrontMissionArtifact[]
@@ -982,6 +991,31 @@ model SystemPolicy {
 // RÉELLEMENT tentée (jamais seulement les succès). Ne loggue JAMAIS une
 // valeur de secret (§14 : "secret exposure" interdit même à l'Owner).
 // ============================================================================
+/**
+ * ONDEAL AI CORE — §14/§15 "Dynamic Agent Registry / Owner Agent Control"
+ * (06/09/2026), clôture réelle. Une ligne PAR RÔLE de spécialiste (voir
+ * AVAILABLE_ROLES, graphRunner.ts) — absente = comportement par défaut
+ * (activé). `enabled=false` a un effet RUNTIME RÉEL : le rôle est retiré des
+ * rôles disponibles proposés au planner (graphRunner.ts) ET dispatchSpecialist
+ * refuse de l'exécuter même si un plan existant (créé avant la désactivation)
+ * le référence encore — défense en profondeur, jamais un simple filtre côté
+ * UI. Le forçage de provider/modèle PAR RÔLE n'existe volontairement PAS ici
+ * (§1 "NO CAPABILITY THEATER") : la sélection provider/modèle est
+ * aujourd'hui globale à la mission (ModelConfig/FailoverProvider), un champ
+ * "preferredModel" sur ce modèle n'aurait aucun effecteur réel tant que
+ * catalogue.ts/specialists.ts ne prennent pas un provider par rôle — jamais
+ * un contrôle qui prétend un effet qu'il n'a pas.
+ */
+model AgentRoleConfig {
+  role            String   @id // ex. "researcher", "coder_implementation" — même chaîne que StorefrontMissionNode.role
+  enabled         Boolean  @default(true)
+  updatedByUserId String?
+  updatedAt       DateTime @updatedAt
+  createdAt       DateTime @default(now())
+
+  @@map("agent_role_configs")
+}
+
 model AiLabAuditLog {
   id           String   @id @default(cuid())
   missionId    String?
@@ -1052,4 +1086,217 @@ model StorefrontMissionArtifact {
 
   @@index([missionId])
   @@map("storefront_mission_artifacts")
+}
+
+// ============================================================================
+// ONDEAL AI CORE — ULTIMATE COMPLETION MANDATE (06/09/2026, session 2).
+//
+// Additions purement additives — aucune colonne existante retirée/renommée,
+// aucune donnée touchée. Chaque nouveau modèle referme un écart précis signalé
+// par le mandat, en réutilisant l'existant (Job Engine, crypto.ts, Control
+// Plane) plutôt qu'en le dupliquant — voir le rapport de session pour le
+// détail modèle par modèle.
+// ============================================================================
+
+// §33/§45 — Connecteurs de PLATEFORME (Owner, jamais scopés par storeId —
+// distinct d'Integration qui est TOUJOURS par boutique/Merchant Plane).
+// Un connecteur ici sert les AGENTS d'AI Lab eux-mêmes (ex. GitHub sur le
+// dépôt ondeal-intelligence lui-même), jamais une donnée d'un marchand.
+// Une seule ligne par provider (pas de storeId) — Owner uniquement
+// (SYSTEM_CODER, capabilities.ts). encryptedCredentials réutilise
+// EXACTEMENT src/lib/crypto.ts (AES-256-GCM), jamais un second mécanisme.
+model PlatformIntegration {
+  id                   String    @id @default(cuid())
+  provider             String    @unique // "github" — string libre, comme Job.type (nouveau connecteur = nouvelle ligne, jamais une migration)
+  status               String    @default("NOT_CONNECTED") // NOT_CONNECTED | CONNECTED | ERROR — calculé depuis le dernier health check RÉEL, jamais déduit de la présence d'un secret
+  encryptedCredentials String?
+  scopesJson           String? // scopes RÉELLEMENT accordés par le token (dérivés d'un appel API réel à la connexion, jamais supposés)
+  connectedByUserId    String?
+  lastHealthCheckAt    DateTime?
+  lastError            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@map("platform_integrations")
+}
+
+// §16 — Model Console complet : Owner peut ENABLE/DISABLE/SET DEFAULT/FORCE
+// FOR TEST/SET MAX COST. Une ligne par (provider, model) UNIQUEMENT quand
+// l'Owner a changé quelque chose par rapport au comportement par défaut du
+// Router (chooseModel) — l'ABSENCE de ligne signifie "comportement par
+// défaut inchangé", jamais un état ambigu. router.ts/dispatch LISENT cette
+// table ; AUCUN fichier supervisor/*.ts n'y écrit (même principe que
+// SystemPolicy : l'IA ne contrôle jamais son propre pouvoir).
+model ModelConfig {
+  id                String    @id @default(cuid())
+  provider          String
+  model             String
+  enabled           Boolean   @default(true) // false = DISABLED, le Router ne le choisit jamais, un appel explicite (forceModel) le refuse aussi
+  isDefault         Boolean   @default(false) // au plus une ligne true à la fois (imposé en code, jamais en contrainte DB — voir setModelDefault())
+  forceForTestUntil DateTime? // si dans le futur, CE modèle est utilisé pour TOUTE nouvelle mission quel que soit le Router — expire seul, jamais une bascule permanente oubliée
+  maxCostPerCallUsd Float? // plafond dur par appel — un appel qui le dépasserait est refusé avant l'exécution, jamais après coup
+  providerPriority  Int       @default(0) // ordre de préférence pour le failover (§24) — plus petit = essayé en premier
+  updatedByUserId   String?
+  updatedAt         DateTime  @updatedAt
+  createdAt         DateTime  @default(now())
+
+  @@unique([provider, model])
+  @@map("model_configs")
+}
+
+// §9/§57-60 — Memory Architecture, gouvernée et tenant-isolée. `storeId`
+// nullable UNIQUEMENT pour la mémoire de plateforme (jamais business d'un
+// marchand — voir §23 tenant isolation, audit architecture frontier) ; toute
+// mémoire liée à UNE boutique DOIT porter un storeId réel, jamais null.
+// "aucune mémoire n'est une source de vérité" (principe déjà écrit dans
+// assistant.ts) : une lecture mémoire concernant prix/stock/marge doit
+// TOUJOURS être réconciliée contre le moteur déterministe avant affichage —
+// contrat documenté ici, appliqué côté appelant (specialists.ts).
+model MemoryRecord {
+  id         String    @id @default(cuid())
+  scope      String // WORKING | EPISODIC | BRAND | DESIGN | ENGINEERING | FAILURE | OUTCOME | MODEL_PERFORMANCE
+  storeId    String? // null = mémoire de plateforme (jamais une donnée business marchand sans storeId)
+  missionId  String? // provenance : mission d'origine, si applicable
+  content    String // texte de la mémoire elle-même
+  metaJson   String? // structuré : ex. {agentCombination, modelTaskPair, tool, strategy} pour SUCCESS/FAILURE memory (§59/§60)
+  confidence Float     @default(1) // 0-1, jamais fabriquée à 1 par défaut sans justification — voir écrivains (specialists.ts)
+  sourceKind String // "mission_result" | "owner_note" | "job_result" | "critic_verdict" | "judge_verdict"
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime? // politique de rétention explicite — null = pas d'expiration automatique (à revoir après relecture RGPD, voir audit conformité 05/09/2026)
+
+  @@index([scope, storeId])
+  @@index([missionId])
+  @@map("memory_records")
+}
+
+// §51/§52 — Experiment Mode : compare deux configurations (modèle, agent,
+// prompt ou stratégie) sur LE MÊME objectif réel, alimente le Gauntlet
+// (ModelEvalRun réutilisé quand la comparaison est purement modèle ;
+// ExperimentRun couvre le cas général — objectif de mission réel, pas
+// seulement les tâches fixes grounding_v1).
+model ExperimentRun {
+  id              String    @id @default(cuid())
+  objective       String
+  dimension       String // "MODEL" | "PROMPT" | "STRATEGY" | "AGENT"
+  createdByUserId String
+  status          String    @default("RUNNING") // RUNNING | COMPLETED | FAILED
+  winnerVariantId String?
+  createdAt       DateTime  @default(now())
+  finishedAt      DateTime?
+
+  variants ExperimentVariant[]
+
+  @@map("experiment_runs")
+}
+
+model ExperimentVariant {
+  id            String   @id @default(cuid())
+  experimentId  String
+  label         String // "A" | "B" | ...
+  provider      String?
+  model         String?
+  promptVariant String?
+  outputText    String?
+  costUsd       Float?
+  latencyMs     Int?
+  score         Float? // jugé par Critic/Judge indépendant (§53), jamais par le variant lui-même
+  scoreReason   String?
+  createdAt     DateTime @default(now())
+
+  experiment ExperimentRun @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+
+  @@index([experimentId])
+  @@map("experiment_variants")
+}
+
+// ============================================================================
+// OWNER STRONG AUTHENTICATION (06/09/2026, "DELIVERY CONDITION — OWNER
+// IDENTITY"). Couche SÉPARÉE et ADDITIONNELLE au-dessus de la session
+// applicative normale (User/AUTH_SECRET JWT, inchangée, sert toujours à
+// authentifier N'IMPORTE QUEL utilisateur, marchand y compris) — jamais un
+// remplacement. Un utilisateur peut être PLATFORM_OWNER_USER_IDS ET pourtant
+// n'avoir AUCUNE PlatformOwnerSession valide : dans ce cas /ai-lab et le
+// Control Plane restent inaccessibles tant qu'une cérémonie WebAuthn réelle
+// n'a pas eu lieu — "PLATFORM OWNER identity ne repose JAMAIS seulement sur
+// email/password/env var/rôle" est donc vrai au niveau du CODE, pas
+// seulement de la documentation : requirePlatformOwnerPage()/
+// requireCapability() vérifient les DEUX (voir authz/ownerSession.ts).
+// ============================================================================
+
+// Une clé WebAuthn/FIDO2 RÉELLE (aucune biométrie/clé privée ne transite ni
+// n'est stockée ici — seule la clé PUBLIQUE + un compteur anti-clonage, le
+// principe même de FIDO2). `credentialId` est l'identifiant opaque renvoyé
+// par l'authenticator, jamais fabriqué côté serveur.
+model PlatformOwnerCredential {
+  id           String    @id @default(cuid())
+  userId       String // doit être dans PLATFORM_OWNER_USER_IDS au moment de l'enregistrement — vérifié à l'écriture, jamais supposé à la lecture
+  credentialId String    @unique // base64url, tel que renvoyé par l'authenticator
+  publicKey    Bytes // clé publique COSE, jamais une clé privée
+  counter      BigInt    @default(0) // anti-clonage FIDO2 : doit strictement augmenter à chaque authentification, sinon clé révoquée (voir ownerSession.ts)
+  transports   String? // JSON des transports déclarés (usb/ble/nfc/internal)
+  deviceLabel  String // libellé humain choisi à l'enregistrement (ex. "MacBook — Touch ID")
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  revokedAt    DateTime?
+
+  @@index([userId])
+  @@map("platform_owner_credentials")
+}
+
+// Codes de récupération à usage unique (second facteur de recours si
+// l'authenticator est perdu) — hashés (jamais en clair), générés UNE SEULE
+// FOIS à l'enregistrement de la première clé, affichés une seule fois au
+// Owner. Consommer un code force l'enregistrement immédiat d'une nouvelle
+// clé avant tout accès Control Plane (voir owner/recovery/consume route).
+model PlatformOwnerRecoveryCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String // sha256 du code, jamais le code lui-même
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("platform_owner_recovery_codes")
+}
+
+// Session Owner SERVER-SIDE (contrairement à la session applicative
+// normale, un JWT stateless sans registre) — c'est ce qui rend la
+// révocation RÉELLE possible : révoquer = `revokedAt` non-null, vérifié à
+// CHAQUE accès Control Plane (jamais un simple TTL qui expire seul).
+// `assuranceLevel` distingue une session juste ouverte par passkey
+// (L2_PASSKEY, accès /ai-lab en lecture + actions non sensibles) d'une
+// session RÉCEMMENT réélevée par une seconde cérémonie WebAuthn
+// (L3_STEP_UP, `stepUpExpiresAt`) — requise avant toute action sensible
+// (kill switch, policy, connecteurs, force model, dispatch production) —
+// voir requireStepUp(), ownerSession.ts.
+model PlatformOwnerSession {
+  id              String    @id @default(cuid())
+  userId          String
+  assuranceLevel  String    @default("L2_PASSKEY") // L2_PASSKEY | L3_STEP_UP
+  stepUpExpiresAt DateTime? // L3_STEP_UP expire seul après une courte fenêtre (voir ownerSession.ts) — jamais une élévation permanente
+  credentialId    String // quelle clé a ouvert CETTE session — traçabilité (§AUDIT)
+  userAgent       String?
+  ipHash          String? // haché (jamais l'IP en clair) — suffisant pour distinguer les sessions dans l'UI "Sessions actives", jamais pour de la géolocalisation
+  createdAt       DateTime  @default(now())
+  lastSeenAt      DateTime  @default(now())
+  revokedAt       DateTime?
+  revokedReason   String?
+
+  @@index([userId, revokedAt])
+  @@map("platform_owner_sessions")
+}
+
+// Challenges WebAuthn éphémères (registration ET authentication) — une
+// ligne par cérémonie en cours, supprimée après vérification ou expiration
+// (jamais réutilisable, anti-replay — le protocole FIDO2 lui-même l'exige).
+model PlatformOwnerWebAuthnChallenge {
+  id        String   @id @default(cuid())
+  userId    String
+  challenge String
+  kind      String // "REGISTRATION" | "AUTHENTICATION" | "STEP_UP"
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId, kind])
+  @@map("platform_owner_webauthn_challenges")
 }

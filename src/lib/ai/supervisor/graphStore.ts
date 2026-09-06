@@ -49,6 +49,46 @@ export async function setMissionRunning(missionId: string) {
 }
 
 /**
+ * §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026), clôture réelle.
+ *
+ * Écrit `pendingInstruction` — une SEULE instruction en attente à la fois
+ * (une deuxième soumission avant que la première ait été consommée par la
+ * boucle ÉCRASE la précédente, jamais empilée silencieusement : l'API route
+ * appelante doit refuser d'écraser une instruction non encore consommée,
+ * voir /api/ai-lab/missions/[id]/instruction). Jamais appelable par un rôle
+ * du graphe lui-même (aucun fichier supervisor/*.ts n'appelle cette fonction
+ * — seule la route Owner-gated le fait) : c'est la garantie structurelle
+ * "AI self-promotion impossible" appliquée ici aussi — l'IA ne peut jamais
+ * s'auto-instruire, seul l'Owner écrit dans ce champ.
+ */
+export async function submitPendingInstruction(missionId: string, text: string): Promise<void> {
+  const mission = await prisma.storefrontMission.findUnique({ where: { id: missionId }, select: { pendingInstruction: true, status: true } });
+  if (!mission) throw new Error(`StorefrontMission "${missionId}" introuvable.`);
+  if (mission.pendingInstruction) throw new Error("Une instruction est déjà en attente de traitement par la boucle — attendez qu'elle soit consommée avant d'en soumettre une nouvelle.");
+  if (["SUCCEEDED", "FAILED", "CANCELLED"].includes(mission.status)) throw new Error(`Mission déjà dans un état terminal (${mission.status}) — impossible d'ajouter une instruction.`);
+  await prisma.storefrontMission.update({ where: { id: missionId }, data: { pendingInstruction: text } });
+}
+
+/**
+ * Consomme ATOMIQUEMENT l'instruction en attente — lue puis EFFACÉE dans la
+ * même transaction, et journalisée dans `instructionsJson` (historique
+ * append-only, jamais une réécriture qui perdrait les instructions
+ * précédentes). Renvoie `null` si aucune instruction n'attend (cas normal,
+ * vérifié à CHAQUE itération de la boucle du graphe).
+ */
+export async function consumePendingInstruction(missionId: string): Promise<string | null> {
+  return prisma.$transaction(async (tx) => {
+    const mission = await tx.storefrontMission.findUnique({ where: { id: missionId }, select: { pendingInstruction: true, instructionsJson: true } });
+    if (!mission?.pendingInstruction) return null;
+    const text = mission.pendingInstruction;
+    const history = mission.instructionsJson ? (JSON.parse(mission.instructionsJson) as Array<{ text: string; addedAt: string }>) : [];
+    history.push({ text, addedAt: new Date().toISOString() });
+    await tx.storefrontMission.update({ where: { id: missionId }, data: { pendingInstruction: null, instructionsJson: JSON.stringify(history) } });
+    return text;
+  });
+}
+
+/**
  * Ajoute des nodes au graphe — appelable À TOUT MOMENT de la mission
  * (réplanification réelle, §5). `key` est unique par mission (contrainte DB
  * `@@unique([missionId, key])`) : ajouter un node avec une clé déjà connue

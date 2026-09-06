@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
 import { CapabilityError, requireCapability } from "@/lib/authz/capabilities";
-import { AnthropicProvider } from "@/lib/ai/providers/anthropic";
+import { FailoverProvider } from "@/lib/ai/providers/failover";
+import { resolveFailoverCandidates } from "@/lib/ai/models/router";
 import { getStorefrontMission } from "@/lib/ai/supervisor/graphStore";
 import { runStorefrontMission } from "@/lib/ai/supervisor/graphRunner";
 import { appendAuditLog } from "@/lib/ai/policy/audit";
@@ -43,7 +44,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: `Mission déjà dans un état terminal (${mission.status}) — non ré-exécutable (créer une nouvelle mission).` }, { status: 409 });
   }
 
-  const provider = new AnthropicProvider();
+  // §22-32 "provider continuity" (06/09/2026) : FailoverProvider remplace
+  // désormais l'unique `new AnthropicProvider()` — si Anthropic échoue
+  // (PROVIDER_DOWN/RATE_LIMIT/...), le candidat suivant (ModelConfig Owner,
+  // ou OpenAI par défaut si sa clé est configurée) reprend la MÊME mission,
+  // jamais une seconde tentative manuelle. Visible dans GenerateResult
+  // .failoverAttempts/.servedBy, jamais un fallback muet.
+  const candidates = await resolveFailoverCandidates();
+  const provider = new FailoverProvider(candidates);
   const maxWallClockMs = Number(process.env.AI_LAB_MAX_WALL_CLOCK_MS ?? "50000");
 
   await appendAuditLog({ missionId: id, actorUserId: userId, action: "mission_run_started", reason: `Exécution démarrée par l'Owner (maxWallClockMs=${maxWallClockMs}).`, resultStatus: "SUCCESS" });

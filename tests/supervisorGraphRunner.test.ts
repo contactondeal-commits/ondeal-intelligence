@@ -134,6 +134,11 @@ vi.mock("@/lib/ai/supervisor/graphStore", () => ({
   },
   isCancelRequested: async () => fake.mission.cancelRequested,
   nodeHeartbeatStale: () => false,
+  // §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026) : jamais d'instruction
+  // en attente dans ces tests (aucun test de ce fichier n'exerce ce chemin
+  // — voir supervisorInstruction.test.ts pour la couverture dédiée).
+  consumePendingInstruction: async () => null,
+  submitPendingInstruction: vi.fn(),
 }));
 
 // PHASE 5 : Policy Engine/Audit mockés (toujours ALLOW_AUTO/no-op ici) — ce
@@ -210,6 +215,15 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     coderMissionArtifact: { findMany: vi.fn().mockResolvedValue([{ id: "a1", missionId: "cm1", stepId: "s1", kind: "SCREENSHOT", storageRef: "/tmp/shot.png", metaJson: null, createdAt: new Date() }]) },
     aiLabAttachment: { findMany: vi.fn().mockResolvedValue([]) },
+    // §14/§15 "Owner Agent Control" (06/09/2026) : listDisabledRoles() lu à
+    // chaque itération de la boucle — vide par défaut ici (aucun rôle
+    // désactivé dans ces tests, comportement identique à avant son ajout).
+    agentRoleConfig: { findMany: vi.fn().mockResolvedValue([]) },
+    // §57-60 "Persistent Memory" (06/09/2026) : recentFailureNotes/
+    // recentSuccessNotes (planning) et writeMemory (échec de node/succès de
+    // mission) sont maintenant appelés par le runner réel — vides par
+    // défaut ici (aucune mémoire pré-existante dans ces tests).
+    memoryRecord: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn().mockResolvedValue({}) },
   },
 }));
 

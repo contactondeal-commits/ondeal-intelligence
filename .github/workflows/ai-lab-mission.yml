@@ -1,0 +1,70 @@
+# ONDEAL AI CORE — §33 "durable runner" (06/09/2026), clôture réelle.
+#
+# Généralisation de coder-mission.yml (Phase 3) pour toute StorefrontMission
+# AI Lab — déclenché RÉELLEMENT par POST /api/ai-lab/missions/[id]/dispatch
+# (via l'API GitHub, workflow_dispatch, avec le jeton du connecteur GitHub
+# Owner — connectors/github.ts), jamais seulement disponible en déclenchement
+# manuel. Zéro nouveau service payant : GitHub Actions donne git, Node, réseau
+# ET Chromium (Playwright) installable — gratuit jusqu'à 3000 min/mois sur
+# dépôt privé (docs.github.com, vérifié Phase 3).
+#
+# ANTHROPIC_API_KEY et DATABASE_URL doivent être configurés en secrets de
+# dépôt (Settings → Secrets → Actions) — jamais commités ici. Le worker
+# écrit dans la MÊME base de production que Vercel : la StorefrontMission
+# (Postgres) reste l'unique source de vérité, peu importe où le worker tourne.
+name: ai-lab-mission
+
+on:
+  workflow_dispatch:
+    inputs:
+      missionId:
+        description: "ID de la StorefrontMission (déjà créée via POST /api/ai-lab/missions, statut QUEUED/PLANNING/PAUSED)"
+        required: true
+      maxWallClockMs:
+        description: "Budget de temps mural pour cette exécution (ms) — défaut 15 minutes"
+        required: false
+        default: "900000"
+      hardBudgetUsd:
+        description: "Plafond de coût dur pour cette exécution (USD, optionnel — SystemPolicy.maxHardBudgetUsdGlobal reste la limite absolue)"
+        required: false
+        default: ""
+
+jobs:
+  run-mission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25 # NO BLIND LOOP au niveau CI — jamais un run qui tourne indéfiniment, même si maxWallClockMs est mal configuré
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      # Chromium seul (pas Firefox/WebKit) — le seul navigateur utilisé par coder/browser.ts, réutilisé tel quel par les missions AI Lab.
+      - run: npx playwright install --with-deps chromium
+
+      - run: npx prisma generate
+
+      - name: Run AI Lab mission
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CREDENTIALS_ENCRYPTION_KEY: ${{ secrets.CREDENTIALS_ENCRYPTION_KEY }}
+          PLATFORM_OWNER_USER_IDS: ${{ secrets.PLATFORM_OWNER_USER_IDS }}
+        run: >
+          npx tsx scripts/run-ai-lab-mission.ts --mission "${{ github.event.inputs.missionId }}"
+          --repo "$GITHUB_WORKSPACE" --port 3918
+          --max-wall-clock-ms "${{ github.event.inputs.maxWallClockMs }}"
+
+      - name: Upload mission artifacts (screenshots, diffs, logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-lab-mission-${{ github.event.inputs.missionId }}
+          path: /tmp/ondeal-coder-missions/**/.mission-*
+          if-no-files-found: ignore
+          retention-days: 14

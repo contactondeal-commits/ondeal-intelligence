@@ -1,6 +1,7 @@
 import path from "node:path";
 import { prisma } from "@/lib/db";
-import { AnthropicProvider } from "@/lib/ai/providers/anthropic";
+import { FailoverProvider } from "@/lib/ai/providers/failover";
+import { resolveFailoverCandidates } from "@/lib/ai/models/router";
 import { claimMissionById, getMission } from "@/lib/ai/coder/missionStore";
 import { runMissionToCompletion } from "@/lib/ai/coder/missionRunner";
 import { buildCoderMissionSteps } from "@/lib/ai/coder/steps";
@@ -49,7 +50,9 @@ async function main() {
     return;
   }
 
-  const provider = new AnthropicProvider();
+  // §22-32 "provider continuity" — même composite que les missions AI Lab.
+  const candidates = await resolveFailoverCandidates();
+  const provider = new FailoverProvider(candidates);
   const steps = buildCoderMissionSteps(provider, {
     sourceRepoRoot: repoRoot,
     security: {

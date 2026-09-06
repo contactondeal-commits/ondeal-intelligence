@@ -1,6 +1,7 @@
 import path from "node:path";
 import { prisma } from "@/lib/db";
-import { AnthropicProvider } from "@/lib/ai/providers/anthropic";
+import { FailoverProvider } from "@/lib/ai/providers/failover";
+import { resolveFailoverCandidates } from "@/lib/ai/models/router";
 import { runStorefrontMission } from "@/lib/ai/supervisor/graphRunner";
 import { reapStaleWorkspaces } from "@/lib/ai/coder/workspace";
 
@@ -30,11 +31,25 @@ async function main() {
   const port = Number(arg("port", "4700"));
   const maxWallClockMs = arg("max-wall-clock-ms", "") ? Number(arg("max-wall-clock-ms")) : undefined;
   const hardBudgetUsd = arg("hard-budget-usd", "") ? Number(arg("hard-budget-usd")) : undefined;
-  const createdByUserId = arg("user");
+  // --user optionnel (06/09/2026, §33 durable runner via GitHub Actions) :
+  // le workflow_dispatch ne transmet QUE missionId (jamais un userId en
+  // clair dans un input de workflow) — on retombe sur
+  // StorefrontMission.createdByUserId, déjà réel et déjà l'Owner qui a créé
+  // la mission, jamais un utilisateur inventé.
+  const explicitUser = arg("user", "");
+  let createdByUserId = explicitUser || undefined;
+  if (!createdByUserId) {
+    const mission = await prisma.storefrontMission.findUnique({ where: { id: missionId }, select: { createdByUserId: true } });
+    if (!mission) throw new Error(`Mission "${missionId}" introuvable — impossible de dériver createdByUserId.`);
+    createdByUserId = mission.createdByUserId;
+  }
 
   await reapStaleWorkspaces(2 * 60 * 60 * 1000);
 
-  const provider = new AnthropicProvider();
+  // §22-32 "provider continuity" — même composite que l'API run route,
+  // pour que le worker GitHub Actions bénéficie du même failover réel.
+  const candidates = await resolveFailoverCandidates();
+  const provider = new FailoverProvider(candidates);
   const outcome = await runStorefrontMission(missionId, {
     provider,
     sourceRepoRoot: repoRoot,

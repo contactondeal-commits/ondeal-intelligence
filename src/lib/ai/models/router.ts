@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/db";
 import { GROUNDING_TASK_SET } from "@/lib/ai/models/tasks";
+import { AnthropicProvider } from "@/lib/ai/providers/anthropic";
+import { OpenAiProvider } from "@/lib/ai/providers/openai";
+import type { FailoverCandidate } from "@/lib/ai/providers/failover";
+import type { ModelProvider } from "@/lib/ai/providers/provider";
 
 /**
  * ONDEAL AI CORE — PHASE 2 : RoutingPolicy réelle (06/09/2026).
@@ -116,4 +120,58 @@ export async function chooseModel(taskSetName: string = GROUNDING_TASK_SET, opts
       winner.avgCost != null ? `, coût moyen ${winner.avgCost.toFixed(6)}$/appel` : ""
     }.`,
   };
+}
+
+function instantiateProvider(providerName: string): ModelProvider | null {
+  if (providerName === "anthropic") return new AnthropicProvider();
+  if (providerName === "openai") return new OpenAiProvider();
+  return null; // provider inconnu — jamais fabriqué, simplement écarté (aucun ModelProvider disponible sous ce nom aujourd'hui)
+}
+
+/**
+ * ONDEAL AI CORE — §18/§24 "Model Console écrivable + failover capability-aware"
+ * (06/09/2026), clôture réelle.
+ *
+ * Construit la liste ORDONNÉE de candidats {provider, model} pour un
+ * FailoverProvider, à partir de deux sources RÉELLES, jamais inventées :
+ *
+ *   1. ModelConfig (table écrite par l'Owner via le Model Console — voir
+ *      /api/ai-lab/models/*). Si au moins une ligne enabled=true existe,
+ *      elle est AUTORITATIVE : l'Owner a explicitement configuré son
+ *      routage, on le respecte à la lettre (providerPriority croissant),
+ *      jamais remplacé silencieusement par une heuristique du Router.
+ *      `forceForTestUntil` dans le futur prend le pas sur tout le reste —
+ *      UNE SEULE ligne forcée à la fois (§18 "force-for-test").
+ *   2. Sinon (aucune configuration Owner encore écrite — état par défaut du
+ *      système) : repli sur `chooseModel()` (heuristique d'évaluation
+ *      existante, PHASE 2) pour le premier candidat Anthropic, complété par
+ *      un second candidat OpenAI SI ET SEULEMENT SI OPENAI_API_KEY est
+ *      configurée (sinon l'ajouter serait un candidat qui échoue à 100% du
+ *      temps — pas un vrai failover, du bruit). C'est ce qui rend le système
+ *      "provider-independent" par défaut dès que l'Owner fournit la
+ *      deuxième clé, sans même toucher le Model Console.
+ */
+export async function resolveFailoverCandidates(taskSetName: string = GROUNDING_TASK_SET): Promise<FailoverCandidate[]> {
+  const configs = await prisma.modelConfig.findMany({ where: { enabled: true }, orderBy: { providerPriority: "asc" } });
+
+  const forced = configs.find((c) => c.forceForTestUntil && c.forceForTestUntil.getTime() > Date.now());
+  const ordered = forced ? [forced] : configs;
+
+  if (ordered.length > 0) {
+    const candidates: FailoverCandidate[] = [];
+    for (const cfg of ordered) {
+      const provider = instantiateProvider(cfg.provider);
+      if (!provider) continue;
+      candidates.push({ provider, model: cfg.model, maxCostPerCallUsd: cfg.maxCostPerCallUsd });
+    }
+    if (candidates.length > 0) return candidates;
+    // Toutes les lignes activées référencent un provider inconnu — état de config invalide, jamais silencieux : repli explicite ci-dessous plutôt qu'une liste vide qui ferait échouer FailoverProvider à la construction.
+  }
+
+  const choice = await chooseModel(taskSetName);
+  const defaultCandidates: FailoverCandidate[] = [{ provider: new AnthropicProvider(), model: choice.model }];
+  if (process.env.OPENAI_API_KEY) {
+    defaultCandidates.push({ provider: new OpenAiProvider(), model: "gpt-4o-mini" });
+  }
+  return defaultCandidates;
 }

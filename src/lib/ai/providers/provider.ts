@@ -73,6 +73,23 @@ export interface GenerateResult {
   /** Tokens réellement consommés, quand le provider les rapporte — alimente JobStep.tokensIn/tokensOut (Observability, fondation §19 de l'audit). */
   tokensIn: number | null;
   tokensOut: number | null;
+  /**
+   * §22-32 "provider continuity" (06/09/2026) — quel provider/modèle a
+   * RÉELLEMENT servi cette réponse. Absent (undefined) pour un ModelProvider
+   * simple (Anthropic/OpenAI directement) : dans ce cas l'appelant connaît
+   * déjà le provider/modèle qu'il a lui-même choisi. Rempli UNIQUEMENT par
+   * un composite comme FailoverProvider, où le candidat qui a réussi peut
+   * différer du premier choix — jamais un provider "de base" ne doit deviner
+   * ou fabriquer cette valeur, seul le composite qui a fait l'essai le sait.
+   */
+  servedBy?: { provider: string; model: string };
+  /**
+   * Historique des candidats essayés avant celui qui a réussi (jamais
+   * silencieux — §32 "Provider Handoff UI toujours visible, jamais un
+   * fallback muet"). Vide/absent si le premier candidat a réussi du premier
+   * coup.
+   */
+  failoverAttempts?: Array<{ provider: string; model: string; failureCategory: string; message: string }>;
 }
 
 export interface ModelProvider {

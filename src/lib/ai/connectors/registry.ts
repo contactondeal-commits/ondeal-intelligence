@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { IntegrationProvider } from "@prisma/client";
+import { githubHealthCheck } from "@/lib/ai/connectors/github";
 
 /**
  * ONDEAL AI CORE — PHASE 5 : Connector Registry (06/09/2026), §"REALITY RULE".
@@ -144,8 +145,31 @@ function archOnly(def: Omit<ConnectorDefinition, "hasRealImplementation" | "vers
   return { ...def, hasRealImplementation: false, version: "0.0.0-architecture-only", documentationReference: "Non implémenté — voir requiredSecrets et le rapport de session AI Lab Ultimate." };
 }
 
+// GitHub (06/09/2026, §45) : PROMU en connecteur RÉEL — un vrai client API
+// (connectors/github.ts) existe désormais, adossé à PlatformIntegration
+// (PAT chiffré, connecté depuis AI LAB → CONNECTORS → GitHub → Connect,
+// jamais une variable d'environnement). hasRealImplementation:true est donc
+// honnête ici (contrairement aux ~25 ci-dessous) — son statut est calculé
+// par un VRAI appel à api.github.com, jamais déduit de la présence d'un secret.
+const GITHUB_CONNECTOR: ConnectorDefinition = {
+  id: "github",
+  name: "GitHub",
+  category: "Development",
+  provider: "github",
+  authType: "ACCESS_TOKEN",
+  capabilities: ["repository_read", "code_search", "pull_request_read", "pull_request_write", "workflow_dispatch"],
+  readWriteLevel: "READ_WRITE",
+  riskLevel: "HIGH",
+  ownerOnly: true,
+  merchantAvailable: false,
+  costClass: "FREE",
+  requiredSecrets: [], // jamais une variable d'environnement — le jeton est saisi par l'Owner via l'UI et chiffré en base (PlatformIntegration), voir connectors/github.ts
+  documentationReference: "src/lib/ai/connectors/github.ts",
+  version: "1.0.0",
+  hasRealImplementation: true,
+};
+
 const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
-  archOnly({ id: "github", name: "GitHub", category: "Development", provider: "github", authType: "APP_INSTALLATION", capabilities: ["repository_read", "repository_write"], readWriteLevel: "READ_WRITE", riskLevel: "HIGH", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY", "GITHUB_APP_INSTALLATION_ID"] }),
   archOnly({ id: "google_calendar", name: "Google Calendar", category: "Productivity", provider: "google", authType: "OAUTH2", capabilities: ["calendar_read"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
   archOnly({ id: "gmail", name: "Gmail", category: "Productivity", provider: "google", authType: "OAUTH2", capabilities: ["email_read"], readWriteLevel: "READ_ONLY", riskLevel: "MEDIUM", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
   archOnly({ id: "google_drive", name: "Google Drive", category: "Productivity", provider: "google", authType: "OAUTH2", capabilities: ["drive_read"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
@@ -176,7 +200,7 @@ const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
   archOnly({ id: "browser_agent", name: "Browser / Agentic Access", category: "Automation", provider: "ondeal_browser_agent", authType: "NONE", capabilities: ["browser_navigate", "browser_screenshot"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: [] }),
 ];
 
-export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [...REAL_CONNECTORS, ...ARCHITECTURE_ONLY_CONNECTORS];
+export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [...REAL_CONNECTORS, GITHUB_CONNECTOR, ...ARCHITECTURE_ONLY_CONNECTORS];
 
 export function getConnectorDefinition(id: string): ConnectorDefinition | undefined {
   return CONNECTOR_REGISTRY.find((c) => c.id === id);
@@ -198,6 +222,16 @@ export function getConnectorDefinition(id: string): ConnectorDefinition | undefi
 export async function getConnectorHealth(id: string, ctx?: { storeId?: string }): Promise<ConnectorHealthResult> {
   const def = getConnectorDefinition(id);
   if (!def) return { status: "NOT_CONFIGURED", detail: `Connecteur "${id}" inconnu du Registry.`, lastSuccessfulCall: null, lastSync: null };
+
+  if (id === "github") {
+    const health = await githubHealthCheck();
+    return {
+      status: health.status,
+      detail: health.detail,
+      lastSuccessfulCall: health.lastHealthCheckAt,
+      lastSync: health.lastHealthCheckAt,
+    };
+  }
 
   if (id === "browser_agent") {
     return {

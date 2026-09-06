@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { CapabilityError, requireCapability } from "@/lib/authz/capabilities";
+import { CapabilityError, requireCapability, requireCapabilityWithStepUp } from "@/lib/authz/capabilities";
+import { OwnerAuthError } from "@/lib/authz/ownerSession";
 import { getSystemPolicy, setSystemPolicy } from "@/lib/ai/policy/engine";
 import { appendAuditLog } from "@/lib/ai/policy/audit";
 
@@ -27,6 +28,7 @@ export async function GET() {
     await requireCapability("SYSTEM_CODER");
   } catch (err) {
     if (err instanceof CapabilityError) return NextResponse.json({ error: err.message }, { status: 403 });
+    if (err instanceof OwnerAuthError) return NextResponse.json({ error: err.message, code: err.code }, { status: 403 });
     throw err;
   }
   const policy = await getSystemPolicy();
@@ -37,11 +39,16 @@ export async function PATCH(req: NextRequest) {
   const parsed = patchSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Paramètres invalides.", details: parsed.error.flatten() }, { status: 400 });
 
+  // §"Kill Switch Owner" / §"sensitive-action gates" (06/09/2026) : toute
+  // écriture de SystemPolicy — kill switch INCLUS — exige une session Owner
+  // RÉÉLEVÉE (step-up WebAuthn < 5 min), jamais seulement une session L2
+  // "juste ouverte". Une session volée sans la clé physique ne suffit pas.
   let userId: string;
   try {
-    ({ userId } = await requireCapability("SYSTEM_CODER"));
+    ({ userId } = await requireCapabilityWithStepUp("SYSTEM_CODER"));
   } catch (err) {
     if (err instanceof CapabilityError) return NextResponse.json({ error: err.message }, { status: 403 });
+    if (err instanceof OwnerAuthError) return NextResponse.json({ error: err.message, code: err.code }, { status: 403 });
     throw err;
   }
 

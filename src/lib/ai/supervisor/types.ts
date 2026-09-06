@@ -23,6 +23,11 @@ export type FactSource =
   | "INTERNAL_DATABASE"
   | "EXTERNAL_RESEARCH"
   | "MODEL_INFERENCE"
+  // §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026) — un fait injecté
+  // parce que l'Owner a ajouté une instruction EN COURS de mission (jamais
+  // confondu avec MODEL_INFERENCE : c'est une décision humaine, pas une
+  // inférence du modèle).
+  | "OWNER_INSTRUCTION"
   // PHASE 5 (06/09/2026) — AI Lab Ultimate : provenance d'un fait extrait
   // d'un fichier joint par l'owner (pipeline attachments/parse.ts), jamais
   // confondu avec INTERNAL_DATABASE (donnée OnDeal) ni EXTERNAL_RESEARCH

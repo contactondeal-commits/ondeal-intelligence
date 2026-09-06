@@ -1,25 +1,31 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { isPlatformOwner } from "@/lib/authz/capabilities";
+import { requireOwnerSession, OwnerAuthError } from "@/lib/authz/ownerSession";
 
 /**
  * ONDEAL AI CORE — PHASE 5 : gate d'une PAGE (jamais une route API — voir
  * requireCapability pour ça) réservée au Platform Owner (06/09/2026).
  *
- * PREMIÈRE page Owner-only du frontend (grep confirmé : aucun précédent
- * dans src/app/**\/*.tsx avant AI Lab) — mêmes règles que
- * requireCapability("SYSTEM_CODER") (PLATFORM_OWNER_USER_IDS, jamais un
- * rôle Membership), mais avec un comportement de PAGE (redirect, jamais une
- * exception JSON) — cohérent avec store-context.ts::requireStore.
- *
- * Décision d'emplacement (voir rapport de session) : AI Lab vit HORS du
- * groupe (app) — (app)/layout.tsx impose implicitement `requireStore`
- * (store-scoped) sur chaque page qu'il contient, alors qu'AI Lab n'est
- * JAMAIS store-scoped par défaut (StorefrontMission.storeId est optionnel).
+ * ÉTENDU (06/09/2026, "DELIVERY CONDITION — OWNER IDENTITY") : appartenir à
+ * PLATFORM_OWNER_USER_IDS ne suffit PLUS à ouvrir /ai-lab — il faut EN PLUS
+ * une PlatformOwnerSession valide (WebAuthn réussi, jamais révoquée) — voir
+ * ownerSession.ts. Un Owner sans session valide (jamais enregistré de
+ * passkey, session révoquée, ou nouvel appareil) est redirigé vers
+ * /owner-auth pour compléter la cérémonie, JAMAIS laissé entrer sur la
+ * seule foi de son rôle applicatif — "PLATFORM OWNER identity ne repose
+ * jamais seulement sur email/password/env var/rôle" est donc vrai au niveau
+ * du CODE ici, pas seulement de la documentation.
  */
 export async function requirePlatformOwnerPage(): Promise<{ userId: string; email: string }> {
   const current = await getCurrentUser();
   if (!current) redirect("/login");
   if (!isPlatformOwner(current.user.id)) redirect("/dashboard");
+  try {
+    await requireOwnerSession(current.user.id);
+  } catch (err) {
+    if (err instanceof OwnerAuthError) redirect("/owner-auth");
+    throw err;
+  }
   return { userId: current.user.id, email: current.user.email };
 }

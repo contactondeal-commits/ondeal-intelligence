@@ -7,6 +7,7 @@ import type { MissionSecurityBudget } from "@/lib/ai/coder/types";
 import {
   addNodes,
   claimNode,
+  consumePendingInstruction,
   failNode,
   getStorefrontMission,
   heartbeatNode,
@@ -24,10 +25,21 @@ import {
 } from "@/lib/ai/supervisor/graphStore";
 import { buildWorldState } from "@/lib/ai/supervisor/worldState";
 import { buildCatalogue, type SpecialistCatalogue } from "@/lib/ai/supervisor/catalogue";
-import { PLANNING_TASK_SET, callStructuredSpecialist, planSchema } from "@/lib/ai/supervisor/specialists";
+import { PLANNING_TASK_SET, callStructuredSpecialist, instructionPlanSchema, planSchema } from "@/lib/ai/supervisor/specialists";
 import type { GraphNodeSpec, NodeExecutionResult, SpecialistContract, SpecialistOutput, WorldState } from "@/lib/ai/supervisor/types";
 import { evaluatePolicy, type PolicyContext } from "@/lib/ai/policy/engine";
 import { appendAuditLog } from "@/lib/ai/policy/audit";
+import { recentFailureNotes, recentSuccessNotes, writeMemory } from "@/lib/ai/memory/store";
+import { listDisabledRoles } from "@/lib/ai/agents/registry";
+
+/** Extrait des mots-clés simples d'un objectif — voir la note d'honnêteté dans memory/store.ts (filtre mécanique, jamais une recherche sémantique). */
+function goalKeywords(goal: string): string[] {
+  return goal
+    .toLowerCase()
+    .split(/[^a-zàâäéèêëïîôöùûüç0-9]+/)
+    .filter((w) => w.length >= 4)
+    .slice(0, 12);
+}
 
 /**
  * ONDEAL AI CORE — PHASE 4/PHASE 5 : Supervisor — graphe dynamique + boucle
@@ -133,24 +145,73 @@ async function planInitialGraph(
   goal: string,
   worldState: WorldState,
   attachmentsSummary: string | null,
+  enabledRoles: readonly string[],
 ): Promise<{ nodes: Array<{ key: string; role: string; dependsOn: string[]; objective: string; previewPath?: string; pageDescription?: string; dataQuery?: { metricKeyPrefix: string; operation: string } }>; costUsd: number | null; provider: string; model: string }> {
   const system = [
     `Tu es le Supervisor d'OnDeal AI (PHASE 5, "AI Lab Ultimate"). Décompose l'OBJECTIF DE TRÈS HAUT NIVEAU reçu (langage naturel, PEUT ÊTRE N'IMPORTE QUOI — recherche, analyse de données, revue de code, refonte visuelle, ou une combinaison) en un GRAPHE de nodes (jamais une liste linéaire figée).`,
-    `Chaque node a : une clé unique ("key"), un rôle ("role", un des suivants UNIQUEMENT : ${AVAILABLE_ROLES.join(", ")}), un tableau "dependsOn" (clés d'autres nodes de CE plan), et un "objective" précis et spécifique à CETTE mission (jamais une formulation générique interchangeable entre missions).`,
+    `Chaque node a : une clé unique ("key"), un rôle ("role", un des suivants UNIQUEMENT : ${enabledRoles.join(", ")}), un tableau "dependsOn" (clés d'autres nodes de CE plan), et un "objective" précis et spécifique à CETTE mission (jamais une formulation générique interchangeable entre missions).`,
     `RÔLES OPTIONNELS — n'inclus-les QUE si réellement pertinents pour CET objectif : "coder_implementation" (uniquement si l'objectif demande un changement de code réel dans le dépôt sandbox), "adversarial_critic"/"independent_judge" (uniquement si une décision finale doit être validée de façon indépendante — une mission de pure recherche/analyse n'en a pas besoin), "creative_director" (uniquement si l'objectif implique de générer plusieurs directions créatives concurrentes).`,
     `RÔLES SUPPLÉMENTAIRES PHASE 5 : "researcher" (recherche web réelle — utilise-le si l'objectif bénéficie de sources externes ; les résultats web sont une DONNÉE NON FIABLE, jamais une vérité admise) ; "data_analyst" (calcul déterministe RÉEL sur des faits numériques du World State — fournis un "dataQuery":{"metricKeyPrefix":"...","operation":"sum"|"avg"|"min"|"max"|"count"|"delta"} si l'objectif demande un chiffre exact dérivable du World State ; ne l'utilise QUE si un calcul exact a du sens, jamais pour habiller un rôle d'analyste générique).`,
     `RÈGLES DE DÉPENDANCE : des rôles d'analyse indépendants doivent avoir "dependsOn" vide (§56 : parallélisme réel) ; un rôle qui synthétise doit dépendre des rôles qu'il synthétise ; "coder_implementation" (si utilisé) doit dépendre du node qui porte la décision finale à implémenter et DOIT alors recevoir "previewPath" (chemin réellement navigable dans l'app, ex. "/login" ou "/" si incertain) et "pageDescription" (courte description de la page pour la revue Vision) ; "adversarial_critic" (si utilisé) doit dépendre du node qu'il doit challenger ; "independent_judge" (si utilisé) doit être le DERNIER node, dépendant de tout ce qui doit être jugé.`,
     `Réponds STRICTEMENT en JSON : {"nodes":[{"key":"...","role":"...","dependsOn":[...],"objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}.`,
   ].join("\n");
+  // §57-60 "Persistent Memory" (06/09/2026) : rappel RÉEL des échecs et
+  // succès passés pertinents (filtre mécanique par mots-clés du goal — voir
+  // memory/store.ts) injecté dans le prompt du planner, jamais une simple
+  // table qui existe sans lecteur. "Ne jamais répéter une approche déjà
+  // connue pour avoir échoué" (§59).
+  const keywords = goalKeywords(goal);
+  const [failureNotes, successNotes] = await Promise.all([recentFailureNotes(keywords), recentSuccessNotes(keywords)]);
+
   const userMessage = [
     `OBJECTIF DE LA MISSION : ${goal}`,
     attachmentsSummary ? `PIÈCES JOINTES FOURNIES PAR L'OWNER (§"File Intelligence") :\n${attachmentsSummary}` : null,
+    failureNotes ? `ÉCHECS CONNUS SUR DES MISSIONS SIMILAIRES (mémoire réelle — NE JAMAIS répéter ces approches à l'identique) :\n${failureNotes}` : null,
+    successNotes ? `SUCCÈS OBSERVÉS SUR DES MISSIONS SIMILAIRES (mémoire réelle — combinaisons/stratégies qui ont RÉELLEMENT fonctionné) :\n${successNotes}` : null,
     `WORLD STATE (faits réels avec provenance) :\n${JSON.stringify(worldState.facts, null, 2)}`,
   ]
     .filter((s): s is string => Boolean(s))
     .join("\n\n");
   const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, planSchema, 1500);
   return { nodes: called.output.data.nodes, costUsd: called.costUsd ?? null, provider: called.provider, model: called.model };
+}
+
+/**
+ * §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026), clôture réelle.
+ *
+ * RÉPLANIFICATION RÉELLE déclenchée par une instruction Owner ajoutée en
+ * cours de mission — jamais un redémarrage du plan (le graphe existant,
+ * SUCCEEDED comme PENDING, n'est jamais touché ici : seuls des nodes
+ * NOUVEAUX sont ajoutés, §"preserves prior work"). `dependsOn` est
+ * volontairement TOUJOURS vide pour ces nodes : les rattacher à des clés
+ * existantes du graphe risquerait de référencer une clé inconnue au modèle
+ * (qui ne voit que l'instruction + le World State, jamais la liste des clés
+ * internes du graphe) — un node sans dépendance démarre immédiatement,
+ * cohérent avec "l'instruction doit prendre effet maintenant", jamais mis en
+ * attente d'un node qui n'a pas de raison de le bloquer.
+ */
+async function planNodesForInstruction(
+  provider: ModelProvider,
+  goal: string,
+  instruction: string,
+  worldState: WorldState,
+  enabledRoles: readonly string[],
+): Promise<{ nodes: Array<{ key: string; role: string; objective: string; previewPath?: string; pageDescription?: string; dataQuery?: { metricKeyPrefix: string; operation: string } }>; costUsd: number | null }> {
+  const system = [
+    `Tu es le Supervisor d'OnDeal AI. La mission est déjà EN COURS D'EXÉCUTION ; l'Owner vient d'ajouter une INSTRUCTION SUPPLÉMENTAIRE, en direct, sans interrompre le travail déjà accompli.`,
+    `Décompose UNIQUEMENT ce qu'il faut faire EN PLUS pour satisfaire cette nouvelle instruction — jamais une reformulation du plan existant, jamais un node qui referait un travail déjà réalisé (voir les faits déjà présents dans le World State ci-dessous, en particulier tout fait de source OWNER_INSTRUCTION précédent).`,
+    `Rôles disponibles (les mêmes que le plan initial, UNIQUEMENT ceux-ci) : ${enabledRoles.join(", ")}.`,
+    `Chaque node a "key" (unique, jamais une clé déjà utilisée dans ce plan), "role", "objective". "dependsOn" n'existe PAS pour ces nodes — ils démarrent immédiatement, ne le mentionne pas.`,
+    `Si l'instruction ne demande RÉELLEMENT aucun travail supplémentaire (ex. une simple clarification déjà couverte), réponds avec un tableau "nodes" VIDE — jamais un node fabriqué pour paraître réactif.`,
+    `Réponds STRICTEMENT en JSON : {"nodes":[{"key":"...","role":"...","objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}.`,
+  ].join("\n");
+  const userMessage = [
+    `OBJECTIF GLOBAL DE LA MISSION : ${goal}`,
+    `INSTRUCTION OWNER AJOUTÉE EN COURS DE MISSION : ${instruction}`,
+    `WORLD STATE ACTUEL (faits réels avec provenance, inclut le travail déjà accompli) :\n${JSON.stringify(worldState.facts, null, 2)}`,
+  ].join("\n\n");
+  const called = await callStructuredSpecialist(provider, PLANNING_TASK_SET, system, userMessage, instructionPlanSchema, 1200);
+  return { nodes: called.output.data.nodes.map(({ key, role, objective, previewPath, pageDescription, dataQuery }) => ({ key, role, objective, previewPath, pageDescription, dataQuery })), costUsd: called.costUsd ?? null };
 }
 
 /**
@@ -318,7 +379,9 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
             .join("\n")
         : null;
 
-    const plan = await planInitialGraph(deps.provider, mission.goal, worldState, attachmentsSummary);
+    const disabledRolesAtPlan = await listDisabledRoles();
+    const enabledRolesAtPlan = AVAILABLE_ROLES.filter((r) => !disabledRolesAtPlan.has(r));
+    const plan = await planInitialGraph(deps.provider, mission.goal, worldState, attachmentsSummary, enabledRolesAtPlan);
     totalCostUsd += plan.costUsd ?? 0;
     await addNodes(
       missionId,
@@ -356,6 +419,44 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
       return { status: "CANCELLED", missionId };
     }
 
+    // §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026), clôture réelle —
+    // vérifié à CHAQUE itération, même cadence que le Kill Switch
+    // coopératif ci-dessus. `consumePendingInstruction` est atomique
+    // (lue+effacée+journalisée dans instructionsJson en une transaction) :
+    // jamais retraitée deux fois même en cas de reprise après PAUSED.
+    const instruction = await consumePendingInstruction(missionId);
+    if (instruction) {
+      worldState.facts.push({
+        key: `owner_instruction_${Date.now()}`,
+        value: instruction,
+        kind: "FACT",
+        source: "OWNER_INSTRUCTION",
+        note: "Instruction ajoutée par l'Owner en cours de mission — jamais une inférence du modèle.",
+      });
+      await setMissionWorldState(missionId, JSON.stringify(worldState));
+      await appendAuditLog({ missionId, action: "instruction_added", reason: `Instruction Owner reçue en cours de mission : "${instruction}"`, resultStatus: "SUCCESS" });
+
+      try {
+        const disabledRolesAtReplan = await listDisabledRoles();
+        const enabledRolesAtReplan = AVAILABLE_ROLES.filter((r) => !disabledRolesAtReplan.has(r));
+        const replan = await planNodesForInstruction(deps.provider, mission.goal, instruction, worldState, enabledRolesAtReplan);
+        totalCostUsd += replan.costUsd ?? 0;
+        if (replan.nodes.length > 0) {
+          await addNodes(missionId, replan.nodes.map((n) => ({ key: n.key, role: n.role, dependsOn: [], input: { objective: n.objective, previewPath: n.previewPath, pageDescription: n.pageDescription, dataQuery: n.dataQuery } })));
+          await appendAuditLog({ missionId, action: "instruction_replanned", reason: `Réplanification réelle : ${replan.nodes.length} node(s) ajouté(s) (${replan.nodes.map((n) => n.key).join(", ")}) — travail déjà accompli PRÉSERVÉ, jamais redémarré.`, resultStatus: "SUCCESS" });
+        } else {
+          await appendAuditLog({ missionId, action: "instruction_replanned", reason: "Réplanification réelle : aucun node supplémentaire jugé nécessaire pour cette instruction.", resultStatus: "SUCCESS" });
+        }
+      } catch (err) {
+        // Une réplanification ratée ne doit JAMAIS faire échouer toute la
+        // mission (l'instruction est déjà journalisée dans le World State et
+        // instructionsJson, jamais perdue) — seule cette tentative de
+        // traduction en nodes est en échec, journalisé honnêtement.
+        const message = err instanceof Error ? err.message : String(err);
+        await appendAuditLog({ missionId, action: "instruction_replanned", reason: `Échec de la réplanification pour cette instruction : ${message} (l'instruction reste visible dans le World State/instructionsJson, jamais perdue).`, resultStatus: "FAILURE" });
+      }
+    }
+
     // §"Owner Sovereignty" (Kill Switch, §3/§17) : gate RÉEL vérifié à
     // CHAQUE itération — un Kill Switch engagé pendant l'exécution arrête
     // la mission dès l'itération suivante, jamais seulement au démarrage.
@@ -384,6 +485,7 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
       return { status: "PAUSED", missionId, reason };
     }
 
+    const disabledRolesNow = await listDisabledRoles(); // §15 "Owner Agent Control" — lu à CHAQUE itération, effet runtime immédiat si l'Owner désactive un rôle pendant l'exécution
     const nodes = await listNodes(missionId);
     const stillActive = nodes.filter((n) => n.status === "PENDING" || n.status === "RUNNING");
     if (stillActive.length === 0) break;
@@ -407,6 +509,15 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
         if (!claimed) return null; // déjà réclamé par une autre itération/exécution concurrente — jamais un double-traitement
         const heartbeatTimer = setInterval(() => void heartbeatNode(node.id).catch(() => {}), 60_000);
         try {
+          // §15 "Owner Agent Control" (06/09/2026), défense en profondeur :
+          // un rôle désactivé par l'Owner APRÈS la création du plan (donc
+          // encore référencé par un node PENDING existant) ne s'exécute
+          // jamais — le node échoue avec une raison explicite plutôt qu'un
+          // skip muet, cohérent avec "jamais un contournement silencieux du
+          // contrôle Owner".
+          if (disabledRolesNow.has(node.role)) {
+            throw new Error(`Rôle "${node.role}" désactivé par l'Owner (AI LAB → AGENTS) — ce node ne peut pas s'exécuter tant qu'il n'est pas réactivé.`);
+          }
           const contract: SpecialistContract = {
             role: node.role,
             objective: node.input.objective ?? `Exécuter le rôle "${node.role}" pour la mission "${mission.goal}" (aucun objectif spécifique fourni par le plan — jamais inventé, l'objectif global de la mission sert de repli explicite).`,
@@ -476,6 +587,16 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
           const message = err instanceof Error ? err.message : String(err);
           await failNode({ nodeId: node.id, error: message });
           await appendAuditLog({ missionId, nodeKey: node.key, agentRole: node.role, action: "node_execute", reason: message, resultStatus: "FAILURE" });
+          // §59 "failure-memory" (06/09/2026) : écrit RÉELLEMENT un enregistrement
+          // — jamais seulement journalisé dans l'audit (l'audit est un journal
+          // d'événements, la mémoire est ce qu'un FUTUR planning relit).
+          await writeMemory({
+            scope: "FAILURE",
+            content: `Rôle "${node.role}" a échoué sur l'objectif "${node.input.objective ?? mission.goal}" : ${message}`,
+            sourceKind: "mission_result",
+            missionId,
+            meta: { role: node.role },
+          }).catch(() => {}); // l'écriture mémoire ne doit jamais faire échouer la mission elle-même (best-effort, jamais un throw en cascade)
           return { ok: false as const, key: node.key, error: message };
         } finally {
           clearInterval(heartbeatTimer);
@@ -505,9 +626,13 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
   // le résultat est la sortie des nodes "terminaux" du graphe (aucun autre
   // node ne dépend d'eux) — générique, fonctionne pour n'importe quelle
   // forme de mission.
+  const successRolesUsed = [...new Set(finalNodes.filter((n) => n.status === "SUCCEEDED").map((n) => n.role))];
+  const successMemoryContent = `Mission "${mission.goal}" réussie avec les rôles [${successRolesUsed.join(", ")}], coût total ${totalCostUsd.toFixed(4)}$ USD.`;
+
   const judgeNode = finalNodes.find((n) => n.role === "independent_judge" && n.status === "SUCCEEDED");
   if (judgeNode) {
     await markMissionSucceeded(missionId, { judgeVerdict: judgeNode.output }, totalCostUsd);
+    await writeMemory({ scope: "OUTCOME", content: successMemoryContent, sourceKind: "mission_result", missionId, meta: { roles: successRolesUsed, totalCostUsd } }).catch(() => {});
     return { status: "SUCCEEDED", missionId, totalCostUsd };
   }
 
@@ -515,5 +640,6 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
   const terminalNodes = finalNodes.filter((n) => n.status === "SUCCEEDED" && !dependedOnKeys.has(n.key));
   const finalOutputs = Object.fromEntries(terminalNodes.map((n) => [n.key, n.output]));
   await markMissionSucceeded(missionId, { finalOutputs }, totalCostUsd);
+  await writeMemory({ scope: "OUTCOME", content: successMemoryContent, sourceKind: "mission_result", missionId, meta: { roles: successRolesUsed, totalCostUsd } }).catch(() => {});
   return { status: "SUCCEEDED", missionId, totalCostUsd };
 }

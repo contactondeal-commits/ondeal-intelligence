@@ -48,6 +48,20 @@ const planNodeSchema = z.object({
 });
 export const planSchema = z.object({ nodes: z.array(planNodeSchema).min(1).max(20) });
 
+/**
+ * §10 "ADD INSTRUCTION DURING MISSION" (06/09/2026) — variante de planSchema
+ * pour la réplanification déclenchée par une instruction Owner en cours de
+ * mission (graphRunner.ts::planNodesForInstruction) : `dependsOn` n'a pas de
+ * sens ici (ces nodes démarrent toujours immédiatement, jamais rattachés à
+ * une clé du graphe existant — voir la justification dans graphRunner.ts) et
+ * `.min(0)` (jamais `.min(1)`) parce qu'une instruction peut légitimement ne
+ * demander AUCUN travail supplémentaire (ex. simple clarification déjà
+ * couverte) — un plan vide est une réponse honnête, jamais un node fabriqué
+ * pour paraître réactif.
+ */
+const instructionPlanNodeSchema = planNodeSchema.omit({ dependsOn: true });
+export const instructionPlanSchema = z.object({ nodes: z.array(instructionPlanNodeSchema).min(0).max(10) });
+
 const analysisDataSchema = z.object({}).passthrough(); // trouvailles libres par rôle — la structure findings/evidence/recommendations (niveau SpecialistOutput) est déjà la contrainte machine-readable
 
 const creativeDirectionSchema = z.object({

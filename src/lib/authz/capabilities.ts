@@ -83,3 +83,34 @@ export async function requireCapability(capability: Capability): Promise<{ userI
   }
   return { userId: current.user.id, email: current.user.email };
 }
+
+/**
+ * §"DELIVERY CONDITION — OWNER IDENTITY" (06/09/2026) : variante RENFORCÉE
+ * de requireCapability, qui exige EN PLUS une PlatformOwnerSession WebAuthn
+ * valide (jamais seulement l'allowlist PLATFORM_OWNER_USER_IDS) — utilisée
+ * par les routes API AI Lab/Control Plane créées ou étendues depuis cette
+ * exigence (missions, connecteurs, policy, sessions). Les routes Control
+ * Plane PRÉ-EXISTANTES (jobs, model-evaluations) restent sur
+ * requireCapability seul, pour ne rien casser rétroactivement — migration
+ * explicite, pas un effet de bord de cette fondation (voir rapport de
+ * session, matrice de complétion).
+ */
+export async function requireCapabilityWithOwnerSession(capability: Capability): Promise<{ userId: string; email: string; ownerSessionId: string }> {
+  const { userId, email } = await requireCapability(capability);
+  const { requireOwnerSession } = await import("@/lib/authz/ownerSession");
+  const { sessionId } = await requireOwnerSession(userId);
+  return { userId, email, ownerSessionId: sessionId };
+}
+
+/**
+ * §"sensitive-action gates" / "step-up authentication" : exige EN PLUS une
+ * élévation RÉCENTE (< 5 min, cérémonie WebAuthn dédiée) — utilisée par les
+ * actions dont un effet réel et sensible dépend directement (kill switch,
+ * policy, connecteurs, force model, dispatch GitHub Actions).
+ */
+export async function requireCapabilityWithStepUp(capability: Capability): Promise<{ userId: string; email: string }> {
+  const { userId, email } = await requireCapability(capability);
+  const { requireStepUp } = await import("@/lib/authz/ownerSession");
+  await requireStepUp(userId);
+  return { userId, email };
+}
