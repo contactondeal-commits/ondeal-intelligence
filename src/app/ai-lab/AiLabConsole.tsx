@@ -15,7 +15,7 @@ import { callWithStepUp } from "@/app/ai-lab/stepUp";
  * connecteur NOT_CONFIGURED s'affiche tel quel, jamais masqué.
  */
 
-type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "evolution" | "policy" | "audit";
+type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "evolution" | "images" | "policy" | "audit";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "composer", label: "Composer" },
@@ -27,6 +27,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "memory", label: "Memory" },
   { id: "experiments", label: "Experiments" },
   { id: "evolution", label: "Evolution" },
+  { id: "images", label: "Images" },
   { id: "policy", label: "Owner Control Center" },
   { id: "audit", label: "Audit" },
 ];
@@ -226,6 +227,7 @@ export default function AiLabConsole({ ownerEmail }: { ownerEmail: string }) {
         {tab === "memory" && <MemoryTab onError={setError} />}
         {tab === "experiments" && <ExperimentsTab onError={setError} />}
         {tab === "evolution" && <EvolutionTab onError={setError} />}
+        {tab === "images" && <ImagesTab onError={setError} />}
         {tab === "policy" && <PolicyTab policy={policy} onChanged={refreshPolicy} onError={setError} />}
         {tab === "audit" && <AuditTab onError={setError} />}
       </main>
@@ -419,8 +421,13 @@ function MissionsTab({ onError }: { onError: (e: string) => void }) {
   const streamedMissionId = selected?.mission.id;
   const streamedMissionStatus = selected?.mission.status;
   useEffect(() => {
+    // Jamais un setState synchrone dans le corps de l'effet ici : quand la
+    // mission ouverte change ou que son statut devient terminal, React
+    // exécute d'abord le cleanup de l'effet PRÉCÉDENT (ci-dessous), qui
+    // ferme déjà le flux et remet liveConnected à false — cette garde n'a
+    // donc besoin que de renoncer à ouvrir un nouveau flux, jamais de
+    // redéclarer un état déjà remis à jour par ce cleanup.
     if (!streamedMissionId || !streamedMissionStatus || !["PLANNING", "RUNNING", "PAUSED"].includes(streamedMissionStatus)) {
-      setLiveConnected(false);
       return;
     }
     const es = new EventSource(`/api/ai-lab/missions/${streamedMissionId}/stream`);
@@ -1490,6 +1497,99 @@ function EvolutionTab({ onError }: { onError: (e: string) => void }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// IMAGES — §41/§202 "provider de génération d'image" : jusqu'ici le Tool
+// Registry annonçait honnêtement "create_image" NOT_CONFIGURED (aucun
+// provider câblé) — désormais un appel RÉEL à OpenAI Images API (dall-e-3),
+// jamais une image de substitution.
+// ---------------------------------------------------------------------------
+interface ImageGenerationView {
+  imageBase64: string;
+  mediaType: string;
+  provider: string;
+  model: string;
+  revisedPrompt: string | null;
+  costUsd: number | null;
+}
+
+function ImagesTab({ onError }: { onError: (e: string) => void }) {
+  const [prompt, setPrompt] = useState("");
+  const [size, setSize] = useState<"1024x1024" | "1024x1792" | "1792x1024">("1024x1024");
+  const [quality, setQuality] = useState<"standard" | "hd">("standard");
+  const [generating, setGenerating] = useState(false);
+  const [result, setResult] = useState<ImageGenerationView | null>(null);
+
+  async function generate() {
+    setGenerating(true);
+    setResult(null);
+    try {
+      const r = await callWithStepUp<ImageGenerationView>("/api/ai-lab/images", {
+        method: "POST",
+        body: JSON.stringify({ prompt, size, quality }),
+      });
+      setResult(r);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "var(--space-5)" }}>
+      <div style={cardStyle}>
+        <h2 style={{ margin: 0, fontSize: 15 }}>Génération d&apos;image réelle</h2>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>
+          Appel réel à OpenAI Images API (dall-e-3, même clé OPENAI_API_KEY que le provider de texte OpenAI). Dépense réelle par image — jamais une image de substitution ni un aperçu simulé.
+        </p>
+        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+          <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            Prompt
+            <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} placeholder="Ex. « Bannière produit minimaliste, fond neutre, éclairage studio. »" style={{ ...inputStyle, marginTop: 4, resize: "vertical" }} />
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+              Taille
+              <select value={size} onChange={(e) => setSize(e.target.value as typeof size)} style={{ ...inputStyle, marginTop: 4 }}>
+                <option value="1024x1024">1024×1024 (carré)</option>
+                <option value="1024x1792">1024×1792 (portrait)</option>
+                <option value="1792x1024">1792×1024 (paysage)</option>
+              </select>
+            </label>
+            <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+              Qualité
+              <select value={quality} onChange={(e) => setQuality(e.target.value as typeof quality)} style={{ ...inputStyle, marginTop: 4 }}>
+                <option value="standard">standard</option>
+                <option value="hd">hd</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <button disabled={generating || !prompt.trim()} style={{ ...buttonStyle, marginTop: 14 }} onClick={generate}>
+          {generating ? "Génération réelle en cours…" : "Générer l'image"}
+        </button>
+      </div>
+
+      {result && (
+        <div style={cardStyle}>
+          <h3 style={{ margin: 0, fontSize: 14 }}>Résultat</h3>
+          <img
+            src={`data:${result.mediaType};base64,${result.imageBase64}`}
+            alt={result.revisedPrompt ?? prompt}
+            style={{ marginTop: 10, maxWidth: "100%", borderRadius: "var(--radius-sm)", border: "1px solid var(--color-border)" }}
+          />
+          <p style={{ fontSize: 12, color: "var(--color-text-faint)", marginTop: 8 }}>
+            {result.provider}/{result.model} {result.costUsd != null && `· ${result.costUsd.toFixed(4)} USD`}
+          </p>
+          {result.revisedPrompt && (
+            <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>Prompt révisé par le modèle : {result.revisedPrompt}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import type { RiskClass } from "@/lib/ai/policy/engine";
 import { webSearchEnabled } from "@/lib/intelligence/assistant";
 import { PARSER_SUPPORT } from "@/lib/ai/attachments/parse";
+import { imageGenerationHealthCheck } from "@/lib/ai/providers/imageGeneration";
 
 /**
  * ONDEAL AI CORE — PHASE 5 : Tool Registry RÉEL (06/09/2026), §"Tool Registry".
@@ -246,18 +247,25 @@ export const TOOL_REGISTRY: ToolDefinition[] = [
     },
   },
   {
+    // §41/§202 (06/09/2026) : câblé à un provider réel (providers/imageGeneration.ts,
+    // OpenAI Images API dall-e-3) — jusqu'ici honnêtement toujours NOT_CONFIGURED,
+    // désormais honnêtement dépendant de la même clé OPENAI_API_KEY que le
+    // 2e ModelProvider (providers/openai.ts), jamais une valeur simulée dans
+    // un sens ou dans l'autre.
     id: "create_image",
     name: "Create Image",
-    description: "Génération d'image IA — AUCUN provider de génération d'image n'est câblé aujourd'hui dans OnDeal Intelligence (jamais simulé).",
+    description: "Génération d'image IA réelle (OpenAI Images API, dall-e-3) — dépend de OPENAI_API_KEY, comme le provider de texte OpenAI.",
     category: "Creative",
     readWrite: "WRITE",
     riskClass: "SANDBOX_EFFECT",
     environmentRestrictions: ["SANDBOX"],
     costModel: "PER_CALL",
     timeoutMs: 60_000,
-    implementedBy: "(non implémenté)",
+    implementedBy: "providers/imageGeneration.ts (OpenAiImageProvider, dall-e-3) — POST /api/ai-lab/images",
     async checkHealth() {
-      return { status: "NOT_CONFIGURED", detail: "Aucun provider de génération d'image configuré — §\"NO CAPABILITY THEATER\", jamais affiché disponible sans provider réel." };
+      const health = await imageGenerationHealthCheck();
+      const map: Record<typeof health.status, ToolHealth> = { AVAILABLE: "AVAILABLE", DISABLED: "NOT_CONFIGURED", ERROR: "UNAVAILABLE", RATE_LIMITED: "DEGRADED" };
+      return { status: map[health.status], detail: health.detail };
     },
   },
 ];
