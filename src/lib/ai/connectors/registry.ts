@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import type { IntegrationProvider } from "@prisma/client";
 import { githubHealthCheck } from "@/lib/ai/connectors/github";
+import { klaviyoHealthCheck } from "@/lib/ai/connectors/klaviyo";
 
 /**
  * ONDEAL AI CORE — PHASE 5 : Connector Registry (06/09/2026), §"REALITY RULE".
@@ -169,6 +170,33 @@ const GITHUB_CONNECTOR: ConnectorDefinition = {
   hasRealImplementation: true,
 };
 
+// Klaviyo (06/09/2026, §"Connecteurs restants") : PROMU en connecteur RÉEL —
+// un vrai client API (connectors/klaviyo.ts) existe désormais. Contrairement
+// à GitHub (PAT Owner-pasté, PlatformIntegration), Klaviyo utilise UNE
+// variable d'environnement plateforme (KLAVIYO_API_KEY, déjà documentée par
+// requiredSecrets avant même cette promotion) — même principe que
+// OPENAI_API_KEY : un seul compte Klaviyo par déploiement OnDeal, jamais un
+// identifiant par boutique. hasRealImplementation:true est donc honnête ici
+// — son statut est calculé par un VRAI appel à a.klaviyo.com (GET
+// /accounts/), jamais déduit de la seule présence de la variable.
+const KLAVIYO_CONNECTOR: ConnectorDefinition = {
+  id: "klaviyo",
+  name: "Klaviyo",
+  category: "Marketing",
+  provider: "klaviyo",
+  authType: "API_KEY",
+  capabilities: ["campaigns_read"],
+  readWriteLevel: "READ_ONLY",
+  riskLevel: "MEDIUM",
+  ownerOnly: false,
+  merchantAvailable: true,
+  costClass: "FREE",
+  requiredSecrets: ["KLAVIYO_API_KEY"],
+  documentationReference: "src/lib/ai/connectors/klaviyo.ts",
+  version: "1.0.0",
+  hasRealImplementation: true,
+};
+
 const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
   archOnly({ id: "google_calendar", name: "Google Calendar", category: "Productivity", provider: "google", authType: "OAUTH2", capabilities: ["calendar_read"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
   archOnly({ id: "gmail", name: "Gmail", category: "Productivity", provider: "google", authType: "OAUTH2", capabilities: ["email_read"], readWriteLevel: "READ_ONLY", riskLevel: "MEDIUM", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] }),
@@ -183,7 +211,6 @@ const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
   archOnly({ id: "canva", name: "Canva", category: "Creative", provider: "canva", authType: "OAUTH2", capabilities: ["design_generate"], readWriteLevel: "READ_WRITE", riskLevel: "MEDIUM", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["CANVA_CLIENT_ID", "CANVA_CLIENT_SECRET"] }),
   archOnly({ id: "cloudinary", name: "Cloudinary", category: "Creative", provider: "cloudinary", authType: "API_KEY", capabilities: ["asset_transform"], readWriteLevel: "READ_WRITE", riskLevel: "LOW", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["CLOUDINARY_API_KEY", "CLOUDINARY_API_SECRET"] }),
   archOnly({ id: "descript", name: "Descript", category: "Media", provider: "descript", authType: "API_KEY", capabilities: ["media_edit"], readWriteLevel: "READ_WRITE", riskLevel: "MEDIUM", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["DESCRIPT_API_KEY"] }),
-  archOnly({ id: "klaviyo", name: "Klaviyo", category: "Marketing", provider: "klaviyo", authType: "API_KEY", capabilities: ["campaigns_read"], readWriteLevel: "READ_ONLY", riskLevel: "MEDIUM", ownerOnly: false, merchantAvailable: true, costClass: "FREE", requiredSecrets: ["KLAVIYO_API_KEY"] }),
   archOnly({ id: "matrixify", name: "Matrixify", category: "Ecommerce", provider: "matrixify", authType: "API_KEY", capabilities: ["bulk_export", "bulk_import"], readWriteLevel: "READ_WRITE", riskLevel: "HIGH", ownerOnly: false, merchantAvailable: true, costClass: "FIXED", requiredSecrets: ["MATRIXIFY_API_KEY"] }),
   archOnly({ id: "supermetrics", name: "Supermetrics", category: "Analytics", provider: "supermetrics", authType: "OAUTH2", capabilities: ["cross_channel_analytics"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["SUPERMETRICS_API_KEY"] }),
   archOnly({ id: "windsor_ai", name: "Windsor.ai", category: "Analytics", provider: "windsor", authType: "API_KEY", capabilities: ["cross_channel_analytics"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: false, merchantAvailable: true, costClass: "USAGE_BASED", requiredSecrets: ["WINDSOR_API_KEY"] }),
@@ -200,7 +227,7 @@ const ARCHITECTURE_ONLY_CONNECTORS: ConnectorDefinition[] = [
   archOnly({ id: "browser_agent", name: "Browser / Agentic Access", category: "Automation", provider: "ondeal_browser_agent", authType: "NONE", capabilities: ["browser_navigate", "browser_screenshot"], readWriteLevel: "READ_ONLY", riskLevel: "LOW", ownerOnly: true, merchantAvailable: false, costClass: "FREE", requiredSecrets: [] }),
 ];
 
-export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [...REAL_CONNECTORS, GITHUB_CONNECTOR, ...ARCHITECTURE_ONLY_CONNECTORS];
+export const CONNECTOR_REGISTRY: ConnectorDefinition[] = [...REAL_CONNECTORS, GITHUB_CONNECTOR, KLAVIYO_CONNECTOR, ...ARCHITECTURE_ONLY_CONNECTORS];
 
 export function getConnectorDefinition(id: string): ConnectorDefinition | undefined {
   return CONNECTOR_REGISTRY.find((c) => c.id === id);
@@ -231,6 +258,12 @@ export async function getConnectorHealth(id: string, ctx?: { storeId?: string })
       lastSuccessfulCall: health.lastHealthCheckAt,
       lastSync: health.lastHealthCheckAt,
     };
+  }
+
+  if (id === "klaviyo") {
+    const health = await klaviyoHealthCheck();
+    const map: Record<typeof health.status, ConnectorStatus> = { AVAILABLE: "CONNECTED", DISABLED: "NOT_CONFIGURED", ERROR: "ERROR", RATE_LIMITED: "DEGRADED" };
+    return { status: map[health.status], detail: health.detail, lastSuccessfulCall: health.status === "AVAILABLE" ? new Date().toISOString() : null, lastSync: null };
   }
 
   if (id === "browser_agent") {
