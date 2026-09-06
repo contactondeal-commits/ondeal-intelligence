@@ -23,6 +23,7 @@ export default function OwnerAuthPage() {
   const [deviceLabel, setDeviceLabel] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [recoveryForm, setRecoveryForm] = useState({ email: "", password: "", code: "" });
+  const [whoami, setWhoami] = useState<{ userId: string; email: string; isPlatformOwner: boolean } | null>(null);
 
   useEffect(() => {
     // Aucune route dédiée "ai-je déjà une clé" — on tente directement une
@@ -35,9 +36,18 @@ export default function OwnerAuthPage() {
     // après démontage si le composant disparaît avant la réponse réseau.
     let active = true;
     (async () => {
-      const res = await fetch("/api/owner/webauthn/login/options", { method: "POST" });
+      const [loginRes, whoamiRes] = await Promise.all([
+        fetch("/api/owner/webauthn/login/options", { method: "POST" }),
+        // FINAL PHASE — auto-diagnostic (06/09/2026) : chargé EN PARALLÈLE,
+        // jamais seulement après un échec de clic, pour que l'Owner voie
+        // immédiatement son userId/email réels et si l'allowlist
+        // PLATFORM_OWNER_USER_IDS le reconnaît — sans jamais avoir besoin
+        // d'une requête SQL directe en production pour le découvrir.
+        fetch("/api/owner/whoami"),
+      ]);
       if (!active) return;
-      setMode(res.ok ? "NEEDS_LOGIN" : "NEEDS_REGISTRATION");
+      setMode(loginRes.ok ? "NEEDS_LOGIN" : "NEEDS_REGISTRATION");
+      if (whoamiRes.ok) setWhoami(await whoamiRes.json());
     })();
     return () => {
       active = false;
@@ -133,6 +143,19 @@ export default function OwnerAuthPage() {
       <h1>Authentification renforcée — Platform Owner</h1>
       <p>AI Lab exige une clé WebAuthn/FIDO2 réelle (Touch ID, Face ID, Windows Hello, clé de sécurité physique) en plus de votre connexion habituelle.</p>
       {error && <p style={{ color: "#c00" }}>{error}</p>}
+
+      {whoami && !whoami.isPlatformOwner && (
+        <div style={{ background: "#332900", border: "1px solid #a67c00", borderRadius: 8, padding: 16, marginBottom: 16 }}>
+          <p style={{ margin: 0, fontWeight: 600 }}>Votre compte n&apos;est pas (encore) reconnu comme Platform Owner.</p>
+          <p style={{ margin: "8px 0 0" }}>
+            Ajoutez cet identifiant à la variable d&apos;environnement <code>PLATFORM_OWNER_USER_IDS</code> sur Vercel (séparée par une virgule si d&apos;autres IDs existent déjà), puis redéployez :
+          </p>
+          <pre style={{ background: "#111", color: "#eee", padding: 12, borderRadius: 6, marginTop: 8, overflowX: "auto" }}>
+            {whoami.userId}
+          </pre>
+          <p style={{ margin: "8px 0 0", fontSize: 13, opacity: 0.8 }}>Connecté en tant que {whoami.email}.</p>
+        </div>
+      )}
 
       {mode === "CHECKING" && <p>Vérification…</p>}
 
