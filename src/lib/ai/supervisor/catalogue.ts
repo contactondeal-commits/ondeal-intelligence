@@ -82,6 +82,7 @@ export function buildCatalogue(provider: ModelProvider) {
         provider: result.provider,
         model: result.model,
         costUsd: result.costUsd,
+        failoverAttempts: result.failoverAttempts,
         tokensIn: result.tokensIn ?? undefined,
         tokensOut: result.tokensOut ?? undefined,
       };
@@ -128,6 +129,7 @@ export function buildCatalogue(provider: ModelProvider) {
       provider: result.provider,
       model: result.model,
       costUsd: result.costUsd,
+      failoverAttempts: result.failoverAttempts,
       tokensIn: result.tokensIn ?? undefined,
       tokensOut: result.tokensOut ?? undefined,
     };
@@ -148,6 +150,7 @@ export function buildCatalogue(provider: ModelProvider) {
       provider: result.provider,
       model: result.model,
       costUsd: result.costUsd,
+      failoverAttempts: result.failoverAttempts,
       tokensIn: result.tokensIn ?? undefined,
       tokensOut: result.tokensOut ?? undefined,
     };
@@ -168,6 +171,7 @@ export function buildCatalogue(provider: ModelProvider) {
       provider: result.provider,
       model: result.model,
       costUsd: result.costUsd,
+      failoverAttempts: result.failoverAttempts,
       tokensIn: result.tokensIn ?? undefined,
       tokensOut: result.tokensOut ?? undefined,
     };
@@ -188,6 +192,7 @@ export function buildCatalogue(provider: ModelProvider) {
       provider: result.provider,
       model: result.model,
       costUsd: result.costUsd,
+      failoverAttempts: result.failoverAttempts,
       tokensIn: result.tokensIn ?? undefined,
       tokensOut: result.tokensOut ?? undefined,
     };
@@ -238,6 +243,7 @@ export function buildCatalogue(provider: ModelProvider) {
       provider: result.provider,
       model: result.model,
       costUsd: result.costUsd,
+      failoverAttempts: result.failoverAttempts,
       tokensIn: result.tokensIn ?? undefined,
       tokensOut: result.tokensOut ?? undefined,
     };
@@ -277,6 +283,7 @@ export function buildCatalogue(provider: ModelProvider) {
       provider: result.provider,
       model: result.model,
       costUsd: result.costUsd,
+      failoverAttempts: result.failoverAttempts,
       tokensIn: result.tokensIn ?? undefined,
       tokensOut: result.tokensOut ?? undefined,
     };

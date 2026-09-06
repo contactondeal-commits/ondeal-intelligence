@@ -121,6 +121,14 @@ export interface StructuredSpecialistResult<T> {
   tokensOut: number | null;
   /** PHASE 5 (§"Web Research") : citations RÉELLES renvoyées par le provider (jamais une URL inventée) — vide si webSearch n'a pas été demandé ou n'a rien retourné. */
   citations: Array<{ url: string; title: string | null }>;
+  /**
+   * §22-32 "provider continuity" (06/09/2026) : présent uniquement quand
+   * `provider` est un composite (FailoverProvider) qui a dû essayer
+   * plusieurs candidats — jamais un fallback muet (§32). Absent (undefined)
+   * quand le premier candidat a servi du premier coup, ou quand `provider`
+   * n'est pas un composite.
+   */
+  failoverAttempts?: Array<{ provider: string; model: string; failureCategory: string; message: string }>;
 }
 
 const specialistEnvelopeSchema = z.object({
@@ -150,6 +158,15 @@ export async function callStructuredSpecialist<T>(
 ): Promise<StructuredSpecialistResult<T>> {
   const choice = await chooseModel(taskSetName);
   const result = await provider.generate({ model: choice.model, system, userMessage, maxTokens, webSearch });
+  // §22-32 : `result.servedBy` n'est renseigné QUE par un composite
+  // (FailoverProvider) — il reflète le candidat qui a RÉELLEMENT répondu,
+  // qui peut différer de `choice` (chooseModel() ne connaît qu'un seul
+  // catalogue, jamais les candidats de failover). Ne JAMAIS rapporter
+  // `choice.provider`/`choice.model` quand `servedBy` dit autre chose —
+  // ce serait un mensonge d'observabilité (§21 "MISSION BELONGS TO ONDEAL",
+  // §32 "jamais un fallback muet").
+  const actualProvider = result.servedBy?.provider ?? choice.provider;
+  const actualModel = result.servedBy?.model ?? choice.model;
   const parsed = extractJson(result.text);
   const envelope = specialistEnvelopeSchema.safeParse(parsed);
   if (!envelope.success) {
@@ -162,15 +179,21 @@ export async function callStructuredSpecialist<T>(
   // estimateCostUsd attend le PROVIDER réel (pour appeler .capabilities()),
   // jamais la chaîne `choice.provider` — bug corrigé : cohérent avec
   // coder/vision.ts::reviewScreenshot qui appelle `estimateCostUsd(provider, ...)`.
-  const costUsd = estimateCostUsd(provider, choice.model, result.tokensIn, result.tokensOut);
+  // estimateCostUsd a besoin des capabilities du candidat qui a RÉELLEMENT
+  // servi (coût par million de tokens diffère selon le provider/modèle) —
+  // `provider.capabilities(actualModel)` résout correctement même quand
+  // `provider` est un composite FailoverProvider (il cherche parmi SES
+  // candidats le modèle qui correspond à `actualModel`, voir failover.ts).
+  const costUsd = estimateCostUsd(provider, actualModel, result.tokensIn, result.tokensOut);
   return {
     output: { ...envelope.data, data: dataResult.data },
-    provider: choice.provider,
-    model: choice.model,
+    provider: actualProvider,
+    model: actualModel,
     costUsd: costUsd ?? undefined,
     tokensIn: result.tokensIn,
     tokensOut: result.tokensOut,
     citations: result.citations,
+    failoverAttempts: result.failoverAttempts,
   };
 }
 

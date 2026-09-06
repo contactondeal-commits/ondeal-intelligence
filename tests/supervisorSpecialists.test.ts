@@ -74,6 +74,35 @@ describe("callStructuredSpecialist — enveloppe + schéma de rôle", () => {
     expect(result.tokensIn).toBeNull();
   });
 
+  it("§22-32 : quand result.servedBy est renseigné (composite FailoverProvider), rapporte le VRAI candidat qui a servi — jamais choice.provider/choice.model, jamais un mensonge d'observabilité", async () => {
+    const provider = {
+      name: "failover",
+      // capabilities("gpt-4o-mini") renvoie les tarifs OpenAI — jamais ceux d'Anthropic (choice.model), cohérent avec un composite qui cherche parmi SES candidats.
+      capabilities: (model: string) => (model === "gpt-4o-mini" ? { maxContextTokens: 128_000, vision: true, toolUse: true, costPerMTokIn: 0.15, costPerMTokOut: 0.6 } : null),
+      generate: vi.fn().mockResolvedValue({
+        text: envelope({ verdict: "PASS", blockingIssues: [], weaknesses: [], rejectionCase: "x" }),
+        citations: [],
+        tokensIn: 200,
+        tokensOut: 80,
+        servedBy: { provider: "openai", model: "gpt-4o-mini" },
+        failoverAttempts: [{ provider: "anthropic", model: "claude-haiku-4-5-20251001", failureCategory: "PROVIDER_DOWN", message: "503" }],
+      }),
+    };
+    const result = await callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema);
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4o-mini");
+    expect(result.failoverAttempts).toEqual([{ provider: "anthropic", model: "claude-haiku-4-5-20251001", failureCategory: "PROVIDER_DOWN", message: "503" }]);
+    // coût calculé sur les tarifs OpenAI (0.6$/M out), pas ceux d'Anthropic.
+    expect(result.costUsd).toBeCloseTo((200 * 0.15 + 80 * 0.6) / 1_000_000, 9);
+  });
+
+  it("sans servedBy (provider simple, jamais de failover) : rapporte choice.provider/choice.model comme avant, failoverAttempts absent", async () => {
+    const provider = fakeProvider(envelope({ verdict: "PASS", blockingIssues: [], weaknesses: [], rejectionCase: "x" }));
+    const result = await callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema);
+    expect(result.provider).toBe("anthropic");
+    expect(result.failoverAttempts).toBeUndefined();
+  });
+
   it("accepte un dataSchema arbitraire (ex. z.object({}).passthrough() pour les analystes génériques)", async () => {
     const provider = fakeProvider(envelope({ anything: "goes", nested: { ok: true } }));
     const schema = z.object({}).passthrough();

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { callWithStepUp } from "@/app/ai-lab/stepUp";
 
 /**
  * ONDEAL AI CORE — PHASE 5 : "AI Lab Ultimate" — Owner Control Center
@@ -14,7 +15,7 @@ import Link from "next/link";
  * connecteur NOT_CONFIGURED s'affiche tel quel, jamais masqué.
  */
 
-type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "policy" | "audit";
+type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "policy" | "audit";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "composer", label: "Composer" },
@@ -22,6 +23,8 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "tools", label: "Tools" },
   { id: "connectors", label: "Connectors" },
   { id: "models", label: "Models" },
+  { id: "agents", label: "Agents" },
+  { id: "memory", label: "Memory" },
   { id: "policy", label: "Owner Control Center" },
   { id: "audit", label: "Audit" },
 ];
@@ -217,6 +220,8 @@ export default function AiLabConsole({ ownerEmail }: { ownerEmail: string }) {
         {tab === "tools" && <ToolsTab onError={setError} />}
         {tab === "connectors" && <ConnectorsTab onError={setError} />}
         {tab === "models" && <ModelsTab onError={setError} />}
+        {tab === "agents" && <AgentsTab onError={setError} />}
+        {tab === "memory" && <MemoryTab onError={setError} />}
         {tab === "policy" && <PolicyTab policy={policy} onChanged={refreshPolicy} onError={setError} />}
         {tab === "audit" && <AuditTab onError={setError} />}
       </main>
@@ -411,6 +416,35 @@ function MissionsTab({ onError }: { onError: (e: string) => void }) {
     refresh();
   }
 
+  const [instructionText, setInstructionText] = useState("");
+  const [instructionBusy, setInstructionBusy] = useState(false);
+  async function addInstruction(id: string) {
+    if (!instructionText.trim()) return;
+    setInstructionBusy(true);
+    try {
+      await callWithStepUp(`/api/ai-lab/missions/${id}/instruction`, { method: "POST", body: JSON.stringify({ text: instructionText.trim() }) });
+      setInstructionText("");
+      open(id);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInstructionBusy(false);
+    }
+  }
+
+  const [dispatchBusy, setDispatchBusy] = useState(false);
+  async function dispatchViaGithub(id: string) {
+    setDispatchBusy(true);
+    try {
+      const r = await callWithStepUp<{ ok: boolean; detail?: string }>(`/api/ai-lab/missions/${id}/dispatch`, { method: "POST" });
+      onError(`Dispatch GitHub Actions : ${r.detail ?? "déclenché"}`);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDispatchBusy(false);
+    }
+  }
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: "var(--space-5)" }}>
       <div style={cardStyle}>
@@ -464,8 +498,27 @@ function MissionsTab({ onError }: { onError: (e: string) => void }) {
                     <button style={{ ...secondaryButtonStyle, color: "var(--color-danger)" }} onClick={() => cancel(selected.mission.id)}>Annuler</button>
                   </>
                 )}
+                {selected.mission.environment !== "PRODUCTION" && (
+                  <button disabled={dispatchBusy} style={secondaryButtonStyle} onClick={() => dispatchViaGithub(selected.mission.id)} title="Déclenche .github/workflows/ai-lab-mission.yml via l'API GitHub — nécessite le connecteur GitHub connecté (onglet Connectors)">
+                    {dispatchBusy ? "Déclenchement…" : "Lancer via GitHub Actions"}
+                  </button>
+                )}
               </div>
             </div>
+
+            {["PLANNING", "RUNNING", "PAUSED"].includes(selected.mission.status) && (
+              <div style={{ marginTop: 14, padding: 10, border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)" }}>
+                <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+                  Ajouter une instruction en cours de mission — prise en compte à la prochaine itération de la boucle (réplanification réelle, travail déjà accompli préservé)
+                  <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                    <input value={instructionText} onChange={(e) => setInstructionText(e.target.value)} placeholder="Ex. « Vérifie aussi l'accessibilité clavier de la nouvelle page. »" style={inputStyle} />
+                    <button disabled={instructionBusy || !instructionText.trim()} style={buttonStyle} onClick={() => addInstruction(selected.mission.id)}>
+                      {instructionBusy ? "Envoi…" : "Ajouter"}
+                    </button>
+                  </div>
+                </label>
+              </div>
+            )}
 
             <h4 style={{ fontSize: 13, marginTop: 18 }}>Graphe ({selected.nodes.length} nodes)</h4>
             <div style={{ display: "grid", gap: 6 }}>
@@ -556,13 +609,29 @@ function ToolsTab({ onError }: { onError: (e: string) => void }) {
 // ---------------------------------------------------------------------------
 // CONNECTORS
 // ---------------------------------------------------------------------------
+interface ConnectorEntry {
+  id: string;
+  name: string;
+  category: string;
+  hasRealImplementation: boolean;
+  requiredSecrets: string[];
+  ownerOnly: boolean;
+  merchantAvailable: boolean;
+  health: { status: string; detail: string };
+}
+
 function ConnectorsTab({ onError }: { onError: (e: string) => void }) {
-  const [connectors, setConnectors] = useState<Array<{ id: string; name: string; category: string; hasRealImplementation: boolean; requiredSecrets: string[]; ownerOnly: boolean; merchantAvailable: boolean; health: { status: string; detail: string } }>>([]);
-  useEffect(() => {
-    api<{ connectors: typeof connectors }>("/api/ai-lab/connectors").then((r) => setConnectors(r.connectors)).catch((e) => onError(String(e)));
+  const [connectors, setConnectors] = useState<ConnectorEntry[]>([]);
+
+  const refresh = useCallback(() => {
+    api<{ connectors: ConnectorEntry[] }>("/api/ai-lab/connectors").then((r) => setConnectors(r.connectors)).catch((e) => onError(String(e)));
   }, [onError]);
 
-  const byCategory = new Map<string, typeof connectors>();
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const byCategory = new Map<string, ConnectorEntry[]>();
   for (const c of connectors) {
     byCategory.set(c.category, [...(byCategory.get(c.category) ?? []), c]);
   }
@@ -572,20 +641,24 @@ function ConnectorsTab({ onError }: { onError: (e: string) => void }) {
       {[...byCategory.entries()].map(([category, list]) => (
         <div key={category}>
           <h3 style={{ fontSize: 13, color: "var(--color-text-faint)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{category}</h3>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10, marginTop: 8 }}>
-            {list.map((c) => (
-              <div key={c.id} style={cardStyle}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <strong style={{ fontSize: 13 }}>{c.name}</strong>
-                  <Badge tone={healthTone(c.health.status)}>{c.health.status}</Badge>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 10, marginTop: 8 }}>
+            {list.map((c) =>
+              c.id === "github" ? (
+                <GithubConnectorCard key={c.id} connector={c} onChanged={refresh} onError={onError} />
+              ) : (
+                <div key={c.id} style={cardStyle}>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <strong style={{ fontSize: 13 }}>{c.name}</strong>
+                    <Badge tone={healthTone(c.health.status)}>{c.health.status}</Badge>
+                  </div>
+                  <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 6 }}>{c.health.detail}</p>
+                  {!c.hasRealImplementation && c.requiredSecrets.length > 0 && (
+                    <p style={{ fontSize: 10, color: "var(--color-text-faint)", marginTop: 4 }}>Nécessiterait : {c.requiredSecrets.join(", ")}</p>
+                  )}
+                  <p style={{ fontSize: 10, color: "var(--color-text-faint)", marginTop: 4 }}>{c.ownerOnly ? "Owner uniquement" : "Disponible marchand"}</p>
                 </div>
-                <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 6 }}>{c.health.detail}</p>
-                {!c.hasRealImplementation && c.requiredSecrets.length > 0 && (
-                  <p style={{ fontSize: 10, color: "var(--color-text-faint)", marginTop: 4 }}>Nécessiterait : {c.requiredSecrets.join(", ")}</p>
-                )}
-                <p style={{ fontSize: 10, color: "var(--color-text-faint)", marginTop: 4 }}>{c.ownerOnly ? "Owner uniquement" : "Disponible marchand"}</p>
-              </div>
-            ))}
+              ),
+            )}
           </div>
         </div>
       ))}
@@ -593,34 +666,340 @@ function ConnectorsTab({ onError }: { onError: (e: string) => void }) {
   );
 }
 
+function GithubConnectorCard({ connector, onChanged, onError }: { connector: ConnectorEntry; onChanged: () => void; onError: (e: string) => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [token, setToken] = useState("");
+  const [repoFullName, setRepoFullName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const connected = connector.health.status === "CONNECTED" || connector.health.status === "AVAILABLE";
+
+  async function connect() {
+    setBusy(true);
+    try {
+      await callWithStepUp("/api/ai-lab/connectors/github/connect", { method: "POST", body: JSON.stringify({ token, repoFullName }) });
+      setToken("");
+      setShowForm(false);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function test() {
+    setBusy(true);
+    try {
+      const r = await api<{ ok: boolean; detail?: string }>("/api/ai-lab/connectors/github/test", { method: "POST" });
+      onError(`GitHub — test réussi : ${r.detail ?? "connexion OK"}`);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disconnect() {
+    if (typeof window !== "undefined" && !window.confirm("Déconnecter le connecteur GitHub ? Les missions coder_implementation ne pourront plus être dispatchées via GitHub Actions.")) return;
+    setBusy(true);
+    try {
+      await callWithStepUp("/api/ai-lab/connectors/github/disconnect", { method: "POST" });
+      onChanged();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={cardStyle}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <strong style={{ fontSize: 13 }}>{connector.name}</strong>
+        <Badge tone={healthTone(connector.health.status)}>{connector.health.status}</Badge>
+      </div>
+      <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 6 }}>{connector.health.detail}</p>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+        {!connected && !showForm && (
+          <button style={buttonStyle} onClick={() => setShowForm(true)}>Connecter…</button>
+        )}
+        {connected && (
+          <>
+            <button disabled={busy} style={secondaryButtonStyle} onClick={test}>Tester</button>
+            <button disabled={busy} style={{ ...secondaryButtonStyle, color: "var(--color-danger)" }} onClick={disconnect}>Déconnecter</button>
+          </>
+        )}
+      </div>
+
+      {showForm && (
+        <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+          <input placeholder="Personal Access Token GitHub" type="password" value={token} onChange={(e) => setToken(e.target.value)} style={inputStyle} />
+          <input placeholder="owner/repo (ex. contactondeal-commits/ondeal-intelligence)" value={repoFullName} onChange={(e) => setRepoFullName(e.target.value)} style={inputStyle} />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button disabled={busy || !token || !repoFullName} style={buttonStyle} onClick={connect}>{busy ? "Vérification…" : "Vérifier et connecter"}</button>
+            <button disabled={busy} style={secondaryButtonStyle} onClick={() => setShowForm(false)}>Annuler</button>
+          </div>
+          <p style={{ fontSize: 10, color: "var(--color-text-faint)" }}>Le jeton est vérifié RÉELLEMENT auprès de l&apos;API GitHub avant d&apos;être chiffré et stocké — jamais enregistré à l&apos;aveugle.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// MODELS
+// MODELS — Model Console écrivable (§18), provider status/failover (§22-32)
 // ---------------------------------------------------------------------------
+interface ModelConsoleEntry {
+  provider: string;
+  model: string;
+  isDefault: boolean;
+  capabilities: { maxContextTokens: number; vision: boolean; costPerMTokIn: number; costPerMTokOut: number } | null;
+  gauntlet: { totalRuns: number; passRate: number | null; avgCostUsd: number | null };
+  configOverride: { enabled: boolean; isDefault: boolean; forceForTestUntil: string | null; maxCostPerCallUsd: number | null; providerPriority: number } | null;
+  providerHealth?: { status: string; detail: string };
+}
+
 function ModelsTab({ onError }: { onError: (e: string) => void }) {
-  const [models, setModels] = useState<Array<{ provider: string; model: string; isDefault: boolean; capabilities: { maxContextTokens: number; vision: boolean; costPerMTokIn: number; costPerMTokOut: number } | null; gauntlet: { totalRuns: number; passRate: number | null; avgCostUsd: number | null } }>>([]);
-  useEffect(() => {
-    api<{ models: typeof models }>("/api/ai-lab/models").then((r) => setModels(r.models)).catch((e) => onError(String(e)));
+  const [models, setModels] = useState<ModelConsoleEntry[]>([]);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    callWithStepUp<{ models: ModelConsoleEntry[] }>("/api/ai-lab/models/config").then((r) => setModels(r.models)).catch((e) => onError(String(e)));
   }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function patch(m: ModelConsoleEntry, patchBody: Record<string, unknown>) {
+    const key = `${m.provider}::${m.model}`;
+    setBusyKey(key);
+    try {
+      await callWithStepUp("/api/ai-lab/models/config", { method: "POST", body: JSON.stringify({ provider: m.provider, model: m.model, ...patchBody }) });
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyKey(null);
+    }
+  }
 
   return (
     <div style={{ display: "grid", gap: 10 }}>
-      {models.map((m) => (
-        <div key={m.model} style={cardStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <strong style={{ fontSize: 13 }}>{m.provider} / {m.model}</strong>
-            {m.isDefault && <Badge tone="info">AUTO ROUTER DEFAULT</Badge>}
+      <p style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+        Contrôle RÉEL du Router/Failover (src/lib/ai/models/router.ts::resolveFailoverCandidates) — effet immédiat sur la prochaine mission. Les actions ci-dessous demandent un step-up WebAuthn (cérémonie proposée automatiquement).
+      </p>
+      {models.map((m) => {
+        const key = `${m.provider}::${m.model}`;
+        const enabled = m.configOverride?.enabled ?? true;
+        const isDefault = m.configOverride?.isDefault ?? m.isDefault;
+        const forced = m.configOverride?.forceForTestUntil && new Date(m.configOverride.forceForTestUntil).getTime() > Date.now();
+        return (
+          <div key={key} style={cardStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <strong style={{ fontSize: 13 }}>{m.provider} / {m.model}</strong>
+              <div style={{ display: "flex", gap: 6 }}>
+                {isDefault && <Badge tone="info">DEFAULT</Badge>}
+                {forced && <Badge tone="warn">FORCED FOR TEST</Badge>}
+                {!enabled && <Badge tone="off">DISABLED</Badge>}
+                {m.providerHealth && <Badge tone={healthTone(m.providerHealth.status)}>{m.providerHealth.status}</Badge>}
+              </div>
+            </div>
+            {m.capabilities && (
+              <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
+                Contexte {m.capabilities.maxContextTokens.toLocaleString("fr-FR")} tokens · Vision {m.capabilities.vision ? "oui" : "non"} · {m.capabilities.costPerMTokIn}$/{m.capabilities.costPerMTokOut}$ par million tokens (in/out)
+              </p>
+            )}
+            {m.providerHealth && <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 2 }}>{m.providerHealth.detail}</p>}
+            <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 4 }}>
+              Gauntlet : {m.gauntlet.totalRuns} run(s) réel(s) — {m.gauntlet.passRate != null ? `${Math.round(m.gauntlet.passRate * 100)}% réussite` : "aucune donnée encore"}
+              {m.gauntlet.avgCostUsd != null && ` · ${m.gauntlet.avgCostUsd.toFixed(4)} USD/appel moyen`}
+            </p>
+            {m.configOverride?.providerPriority != null && m.configOverride.providerPriority !== 0 && (
+              <p style={{ fontSize: 11, color: "var(--color-text-faint)" }}>Priorité failover : {m.configOverride.providerPriority}</p>
+            )}
+            {m.configOverride?.maxCostPerCallUsd != null && <p style={{ fontSize: 11, color: "var(--color-text-faint)" }}>Plafond coût/appel : {m.configOverride.maxCostPerCallUsd} USD</p>}
+            <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+              <button disabled={busyKey === key} style={secondaryButtonStyle} onClick={() => patch(m, { enabled: !enabled })}>
+                {enabled ? "Désactiver" : "Activer"}
+              </button>
+              <button disabled={busyKey === key || isDefault} style={secondaryButtonStyle} onClick={() => patch(m, { isDefault: true })}>
+                Définir par défaut
+              </button>
+              <button
+                disabled={busyKey === key}
+                style={secondaryButtonStyle}
+                onClick={() => {
+                  const minutes = window.prompt("Forcer ce modèle pour TOUTE nouvelle mission pendant combien de minutes ?", "30");
+                  if (minutes) patch(m, { forceForTestMinutes: Number(minutes) });
+                }}
+              >
+                Forcer pour test…
+              </button>
+              {forced && (
+                <button disabled={busyKey === key} style={secondaryButtonStyle} onClick={() => patch(m, { forceForTestMinutes: null })}>
+                  Annuler le forçage
+                </button>
+              )}
+              <button
+                disabled={busyKey === key}
+                style={secondaryButtonStyle}
+                onClick={() => {
+                  const cost = window.prompt("Plafond de coût par appel (USD, pire cas) — laisser vide pour aucun plafond :", m.configOverride?.maxCostPerCallUsd != null ? String(m.configOverride.maxCostPerCallUsd) : "");
+                  if (cost === null) return;
+                  patch(m, { maxCostPerCallUsd: cost.trim() === "" ? null : Number(cost) });
+                }}
+              >
+                Plafond de coût…
+              </button>
+              <button
+                disabled={busyKey === key}
+                style={secondaryButtonStyle}
+                onClick={() => {
+                  const priority = window.prompt("Priorité failover (0 = essayé en premier) :", String(m.configOverride?.providerPriority ?? 0));
+                  if (priority) patch(m, { providerPriority: Number(priority) });
+                }}
+              >
+                Priorité…
+              </button>
+              {m.configOverride && (
+                <button disabled={busyKey === key} style={{ ...secondaryButtonStyle, color: "var(--color-danger)" }} onClick={() => patch(m, { removeOverride: true })}>
+                  Retirer l&apos;override
+                </button>
+              )}
+            </div>
           </div>
-          {m.capabilities && (
-            <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
-              Contexte {m.capabilities.maxContextTokens.toLocaleString("fr-FR")} tokens · Vision {m.capabilities.vision ? "oui" : "non"} · {m.capabilities.costPerMTokIn}$/{m.capabilities.costPerMTokOut}$ par million tokens (in/out)
+        );
+      })}
+      {models.length === 0 && <p style={{ color: "var(--color-text-faint)" }}>Chargement…</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS — Dynamic Agent Registry + Owner Agent Control (§14-15)
+// ---------------------------------------------------------------------------
+interface AgentRegistryEntry {
+  role: string;
+  enabled: boolean;
+  missionCount: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number | null;
+  avgCostUsd: number | null;
+  avgLatencyMs: number | null;
+  modelsUsed: Array<{ provider: string; model: string; count: number }>;
+}
+
+function AgentsTab({ onError }: { onError: (e: string) => void }) {
+  const [agents, setAgents] = useState<AgentRegistryEntry[]>([]);
+  const [busyRole, setBusyRole] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    callWithStepUp<{ agents: AgentRegistryEntry[] }>("/api/ai-lab/agents").then((r) => setAgents(r.agents)).catch((e) => onError(String(e)));
+  }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function toggle(role: string, enabled: boolean) {
+    setBusyRole(role);
+    try {
+      await callWithStepUp("/api/ai-lab/agents/config", { method: "POST", body: JSON.stringify({ role, enabled }) });
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyRole(null);
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <p style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+        Statistiques réelles agrégées depuis les missions exécutées (StorefrontMissionNode). Désactiver un rôle a un effet runtime immédiat : il est retiré des rôles proposés au planner ET tout node existant qui le référence encore échoue explicitement (jamais une exécution silencieuse).
+      </p>
+      {agents.map((a) => (
+        <div key={a.role} style={cardStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <strong style={{ fontSize: 13 }}>{a.role}</strong>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {!a.enabled && <Badge tone="off">DISABLED</Badge>}
+              <button disabled={busyRole === a.role} style={secondaryButtonStyle} onClick={() => toggle(a.role, !a.enabled)}>
+                {a.enabled ? "Désactiver" : "Réactiver"}
+              </button>
+            </div>
+          </div>
+          <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
+            {a.missionCount} mission(s) · {a.successCount} succès / {a.failureCount} échec(s)
+            {a.successRate != null && ` · ${Math.round(a.successRate * 100)}% réussite`}
+          </p>
+          <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 4 }}>
+            {a.avgCostUsd != null ? `Coût moyen ${a.avgCostUsd.toFixed(4)} USD` : "Coût moyen inconnu"} · {a.avgLatencyMs != null ? `Latence moyenne ${Math.round(a.avgLatencyMs / 1000)}s` : "Latence inconnue"}
+          </p>
+          {a.modelsUsed.length > 0 && (
+            <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 4 }}>
+              Modèles utilisés : {a.modelsUsed.map((mu) => `${mu.provider}/${mu.model} (${mu.count})`).join(", ")}
             </p>
           )}
-          <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 4 }}>
-            Gauntlet : {m.gauntlet.totalRuns} run(s) réel(s) — {m.gauntlet.passRate != null ? `${Math.round(m.gauntlet.passRate * 100)}% réussite` : "aucune donnée encore"}
-            {m.gauntlet.avgCostUsd != null && ` · ${m.gauntlet.avgCostUsd.toFixed(4)} USD/appel moyen`}
-          </p>
         </div>
       ))}
+      {agents.length === 0 && <p style={{ color: "var(--color-text-faint)" }}>Chargement…</p>}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MEMORY — Persistent Memory foundation (§57-60), lecture Owner
+// ---------------------------------------------------------------------------
+const MEMORY_SCOPES = ["WORKING", "EPISODIC", "BRAND", "DESIGN", "ENGINEERING", "FAILURE", "OUTCOME", "MODEL_PERFORMANCE"] as const;
+
+function MemoryTab({ onError }: { onError: (e: string) => void }) {
+  const [scope, setScope] = useState<string>("");
+  const [records, setRecords] = useState<Array<{ id: string; scope: string; content: string; sourceKind: string; confidence: number; missionId: string | null; createdAt: string }>>([]);
+
+  const refresh = useCallback(() => {
+    const qs = scope ? `?scope=${scope}` : "";
+    callWithStepUp<{ records: typeof records }>(`/api/ai-lab/memory${qs}`).then((r) => setRecords(r.records)).catch((e) => onError(String(e)));
+  }, [scope, onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={cardStyle}>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+          Mémoire persistante RÉELLEMENT lue par le planning (échecs connus jamais répétés, succès observés réutilisés — voir graphRunner.ts::planInitialGraph). Filtre mécanique par mots-clés, jamais une recherche sémantique fabriquée.
+        </p>
+        <label style={{ fontSize: 12, color: "var(--color-text-muted)", display: "block", marginTop: 10 }}>
+          Filtrer par scope
+          <select value={scope} onChange={(e) => setScope(e.target.value)} style={{ ...inputStyle, marginTop: 4, maxWidth: 260 }}>
+            <option value="">Tous les scopes</option>
+            {MEMORY_SCOPES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {records.map((r) => (
+          <div key={r.id} style={{ ...cardStyle, padding: "var(--space-3)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Badge tone={r.scope === "FAILURE" ? "err" : r.scope === "OUTCOME" ? "ok" : "info"}>{r.scope}</Badge>
+              <span style={{ fontSize: 11, color: "var(--color-text-faint)" }}>{new Date(r.createdAt).toLocaleString("fr-FR")}</span>
+            </div>
+            <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>{r.content}</p>
+            <p style={{ fontSize: 10, color: "var(--color-text-faint)", marginTop: 4 }}>
+              {r.sourceKind} · confiance {r.confidence} {r.missionId && `· mission ${r.missionId}`}
+            </p>
+          </div>
+        ))}
+        {records.length === 0 && <p style={{ color: "var(--color-text-faint)" }}>Aucun enregistrement pour ce filtre.</p>}
+      </div>
     </div>
   );
 }
@@ -686,6 +1065,74 @@ function PolicyForm({ policy, onChanged, onError }: { policy: Record<string, unk
       <div style={cardStyle}>
         <h3 style={{ margin: 0, fontSize: 14 }}>État actuel</h3>
         <pre style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 8, whiteSpace: "pre-wrap" }}>{JSON.stringify(policy, null, 2)}</pre>
+      </div>
+
+      <OwnerSessionsPanel onError={onError} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OWNER SESSIONS — §"DELIVERY CONDITION — OWNER IDENTITY" (revocation réelle)
+// ---------------------------------------------------------------------------
+interface OwnerSessionRow {
+  id: string;
+  assuranceLevel: string;
+  createdAt: string;
+  lastSeenAt: string;
+  userAgent: string | null;
+  revokedAt: string | null;
+  isCurrent: boolean;
+}
+
+function OwnerSessionsPanel({ onError }: { onError: (e: string) => void }) {
+  const [sessions, setSessions] = useState<OwnerSessionRow[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    callWithStepUp<{ sessions: OwnerSessionRow[] }>("/api/owner/sessions").then((r) => setSessions(r.sessions)).catch((e) => onError(String(e)));
+  }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function revoke(id: string) {
+    setBusyId(id);
+    try {
+      await callWithStepUp(`/api/owner/sessions/${id}/revoke`, { method: "POST" });
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div style={cardStyle}>
+      <h3 style={{ margin: 0, fontSize: 14 }}>Sessions Owner (WebAuthn) — révocation réelle</h3>
+      <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>
+        Table dédiée (PlatformOwnerSession), séparée de la session applicative normale — la révocation ici prend effet IMMÉDIATEMENT sur toute route Control Plane protégée.
+      </p>
+      <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+        {sessions.map((s) => (
+          <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--color-border)", fontSize: 12 }}>
+            <div>
+              <Badge tone={s.revokedAt ? "off" : s.assuranceLevel === "L3_STEP_UP" ? "ok" : "info"}>{s.revokedAt ? "REVOKED" : s.assuranceLevel}</Badge>
+              <span style={{ marginLeft: 8, color: "var(--color-text-muted)" }}>
+                Dernière activité {new Date(s.lastSeenAt).toLocaleString("fr-FR")} — {s.userAgent ?? "agent inconnu"}
+              </span>
+              {s.isCurrent && <span style={{ marginLeft: 8, color: "var(--color-text-faint)" }}>(session actuelle)</span>}
+            </div>
+            {!s.revokedAt && (
+              <button disabled={busyId === s.id} style={{ ...secondaryButtonStyle, color: "var(--color-danger)" }} onClick={() => revoke(s.id)}>
+                Révoquer
+              </button>
+            )}
+          </div>
+        ))}
+        {sessions.length === 0 && <p style={{ color: "var(--color-text-faint)" }}>Aucune session active.</p>}
       </div>
     </div>
   );

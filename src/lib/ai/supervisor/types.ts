@@ -94,6 +94,8 @@ export interface NodeExecutionResult {
   tokensIn?: number;
   tokensOut?: number;
   artifacts?: Array<{ kind: JobArtifactKind; storageRef: string; meta?: Record<string, unknown> }>;
+  /** §22-32 "provider continuity" : présent uniquement si le FailoverProvider a dû essayer plusieurs candidats pour ce node — jamais un fallback muet (voir specialists.ts::callStructuredSpecialist). */
+  failoverAttempts?: Array<{ provider: string; model: string; failureCategory: string; message: string }>;
 }
 
 /**

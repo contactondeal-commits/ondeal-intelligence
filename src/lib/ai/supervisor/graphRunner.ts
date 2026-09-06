@@ -551,6 +551,16 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
             execResult = await executor({ contract, getNodeOutput, worldState, workspaceRoot: deps.sourceRepoRoot });
           }
 
+          // §32 "Provider Handoff UI toujours visible, jamais un fallback
+          // muet" : si le FailoverProvider a dû essayer d'autres candidats
+          // avant que celui-ci ne réponde, c'est visible ICI, dans le MÊME
+          // journal d'audit que l'utilisateur consulte déjà (onglet
+          // Missions → Décisions & Audit) — aucune nouvelle table, aucun
+          // nouvel écran requis pour que ce soit honnêtement visible.
+          const failoverNote =
+            execResult.failoverAttempts && execResult.failoverAttempts.length > 0
+              ? ` [PROVIDER CONTINUITY] ${execResult.failoverAttempts.length} candidat(s) essayé(s) avant succès : ${execResult.failoverAttempts.map((a) => `${a.provider}/${a.model}→${a.failureCategory}`).join(", ")}.`
+              : "";
           await appendAuditLog({
             missionId,
             nodeKey: node.key,
@@ -558,7 +568,7 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
             provider: execResult.provider,
             model: execResult.model,
             action: "node_execute",
-            reason: `Node "${node.key}" (rôle "${node.role}") exécuté avec succès.`,
+            reason: `Node "${node.key}" (rôle "${node.role}") exécuté avec succès.${failoverNote}`,
             costUsd: execResult.costUsd,
             resultStatus: "SUCCESS",
           });
