@@ -157,6 +157,7 @@ model Store {
   marginSnapshots  MarginSnapshot[]
   analyticsSnapshots        AnalyticsSnapshot[]
   analyticsChannelSnapshots AnalyticsChannelSnapshot[]
+  jobs                      Job[]
 
   @@index([organizationId])
   @@map("stores")
@@ -616,4 +617,111 @@ model AuditLog {
 
   @@index([storeId, createdAt])
   @@map("audit_logs")
+}
+
+// ONDEAL AI JOB ENGINE (fondation 06/09/2026) — voir
+// claude/ondeal-ai-job-engine-foundation-06-09-2026.md pour l'architecture
+// complète. Trois modèles seulement, délibérément : Job (état + point de
+// reprise), JobStep (journal d'ajout seul — jamais réécrit — une ligne par
+// TENTATIVE d'étape, jamais mise à jour en place, pour que reprise/retry/
+// audit soient la MÊME donnée plutôt que trois mécanismes séparés),
+// JobArtifact (référence légère vers un fichier produit par une étape —
+// capture d'écran, diff, log — jamais le contenu lui-même en base). Les
+// événements de cycle de vie haut niveau (job créé/terminé-échoué) utilisent
+// AuditLog, déjà existant — pas de table d'événements séparée.
+enum JobStatus {
+  QUEUED
+  PLANNING
+  RUNNING
+  WAITING_RETRY
+  PAUSED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum JobStepStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum JobArtifactKind {
+  SCREENSHOT
+  FILE
+  DIFF
+  LOG
+  OTHER
+}
+
+model Job {
+  id              String    @id @default(cuid())
+  storeId         String
+  type            String    // ex. "gauntlet_task" — voir src/lib/ai/jobs/types.ts pour la liste ouverte, jamais figée en enum (nouveaux types de tâche sans migration)
+  status          JobStatus @default(QUEUED)
+  inputJson       String    // payload de départ (jamais modifié après création — la reprise ne rejoue QUE les steps, jamais l'input)
+  resultJson      String?   // résultat final (succès) — jamais renseigné avant status SUCCEEDED
+  lastError       String?   // dernière erreur lisible — pour affichage rapide sans relire les steps
+  currentStepIndex Int      @default(0) // prochain index de step à exécuter — la reprise relit ce champ, jamais un recalcul déduit des steps (source unique, mise à jour atomiquement avec le step qui vient de réussir)
+  attempt         Int       @default(0) // tentatives au niveau JOB (relance globale après échec définitif d'un step) — distinct de JobStep.attempt (tentatives au niveau d'UN step)
+  maxAttempts      Int       @default(3) // NO BLIND LOOP — jamais un job sans plafond explicite
+  cancelRequested Boolean   @default(false) // annulation COOPÉRATIVE — le worker vérifie ce flag entre deux steps, jamais de coupure forcée d'un process externe
+  createdByUserId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  startedAt       DateTime?
+  finishedAt      DateTime?
+
+  store Store      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  steps JobStep[]
+  artifacts JobArtifact[]
+
+  @@index([storeId, status])
+  @@index([status, createdAt]) // pour claimNextQueuedJob() — un seul index couvre la file par statut, tous stores confondus
+  @@map("jobs")
+}
+
+model JobStep {
+  id          String        @id @default(cuid())
+  jobId       String
+  index       Int           // position dans le plan du job — 0-based, stable une fois écrit
+  attempt     Int           @default(1) // 1ère tentative de CET index — une nouvelle ligne par retry, jamais une mise à jour de la précédente (voir commentaire au-dessus du bloc Job Engine)
+  name        String        // ex. "plan" | "execute:tool_x" | "verify" | "critic" — libre, jamais un enum figé
+  status      JobStepStatus @default(PENDING)
+  inputJson   String?
+  outputJson  String?
+  errorJson   String?
+  provider    String?       // "anthropic" | futur "openai"/"google" — voir src/lib/ai/providers/provider.ts ; null si le step ne fait pas d'appel modèle (ex. step purement mécanique)
+  model       String?
+  costUsd     Float?
+  tokensIn    Int?
+  tokensOut   Int?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  heartbeatAt DateTime?     // rafraîchi par le worker pendant un step long — un step RUNNING sans heartbeat récent est considéré abandonné et repris (même principe que RUNNING_GUARD_MS dans src/app/api/cron/sync/route.ts)
+  createdAt   DateTime      @default(now())
+
+  job       Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  artifacts JobArtifact[]
+
+  @@index([jobId, index, attempt])
+  @@map("job_steps")
+}
+
+model JobArtifact {
+  id         String           @id @default(cuid())
+  jobId      String
+  stepId     String?
+  kind       JobArtifactKind
+  storageRef String           // chemin/URL vers le fichier réel — jamais le contenu en base (voir commentaire au-dessus du bloc Job Engine) ; stockage concret (Vercel Blob ou équivalent) non branché à cette fondation, storageRef reste un simple champ texte en attendant
+  metaJson   String?
+  createdAt  DateTime         @default(now())
+
+  job  Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  step JobStep? @relation(fields: [stepId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@map("job_artifacts")
 }
