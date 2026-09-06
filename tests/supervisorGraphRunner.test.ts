@@ -43,6 +43,13 @@ const fake = vi.hoisted(() => ({
     ],
   },
   executorImpl: {} as Record<string, (ctx: { getNodeOutput(key: string): SpecialistOutput | undefined }) => Promise<NodeExecutionResult>>,
+  // CORRECTIF DE PRODUCTION (06/09/2026, mission réelle
+  // "cmtq415440000l204rqiey6j8") : quand défini, le mock de
+  // callStructuredSpecialist (planning) lève CETTE erreur au lieu de
+  // renvoyer planResult — reproduit exactement la classe de bug réelle
+  // (exception non interceptée pendant la planification, avant le premier
+  // node persisté).
+  planShouldThrowMessage: null as string | null,
   reset() {
     this.nodes = [];
     this.mission = { id: "mission1", goal: "Refonte candidate premium de /login", cancelRequested: false, worldStateJson: null };
@@ -50,6 +57,7 @@ const fake = vi.hoisted(() => ({
     this.lastError = null;
     this.resultJson = null;
     this.nextId = 1;
+    this.planShouldThrowMessage = null;
     this.executorImpl = {
       brand_strategist: async () => ({ output: ok({ note: "brand ok" }) }),
       ux_architect: async () => ({ output: ok({ note: "ux ok" }) }),
@@ -173,14 +181,19 @@ vi.mock("@/lib/ai/supervisor/specialists", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ai/supervisor/specialists")>();
   return {
     ...actual,
-    callStructuredSpecialist: async () => ({
-      output: ok(fake.planResult),
-      provider: "anthropic",
-      model: "claude-haiku-4-5-20251001",
-      costUsd: 0.005,
-      tokensIn: 500,
-      tokensOut: 300,
-    }),
+    callStructuredSpecialist: async () => {
+      if (fake.planShouldThrowMessage) {
+        throw new Error(fake.planShouldThrowMessage);
+      }
+      return {
+        output: ok(fake.planResult),
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        costUsd: 0.005,
+        tokensIn: 500,
+        tokensOut: 300,
+      };
+    },
   };
 });
 
@@ -298,5 +311,63 @@ describe("runStorefrontMission — rôle de plan inconnu (§85 : bug de plan, ja
     expect(outcome.status).toBe("FAILED");
     const node = fake.nodes.find((n) => n.key === "mystere");
     expect(node?.status).toBe("FAILED");
+  });
+});
+
+/**
+ * RÉGRESSION — BUG DE PRODUCTION RÉEL (06/09/2026, mission
+ * "cmtq415440000l204rqiey6j8", premier vrai test Owner en production).
+ *
+ * Symptôme original observé par l'Owner : MISSION_CREATE + MISSION_RUN_STARTED
+ * présents dans l'Audit, puis PLUS RIEN — la mission restait bloquée en
+ * PLANNING/EN DIRECT avec "Graphe (0 nodes)" et coût "—", et le Composer
+ * affichait un simple "Erreur HTTP 500" opaque. Root cause confirmée : le
+ * prompt système du planner (planInitialGraph) demandait une réponse JSON
+ * "nue" ({"nodes":[...]} à la racine) alors que callStructuredSpecialist
+ * exige INCONDITIONNELLEMENT l'enveloppe complète — une exception levée à
+ * CE stade (avant setMissionRunning/addNodes, donc avant que la mission ne
+ * quitte son statut de création PLANNING et avant qu'aucun node ne soit
+ * persisté) se propageait NON INTERCEPTÉE jusqu'à la route API (aucun
+ * try/catch), produisant exactement ce symptôme.
+ *
+ * Ce test ne dépend PAS de la cause précise (le prompt est corrigé par
+ * ailleurs) — il simule N'IMPORTE QUELLE exception fatale pendant la
+ * planification (§"defense in depth" du correctif : callStructuredSpecialist
+ * lève, comme le ferait une vraie non-conformité JSON, une panne provider,
+ * ou tout autre échec futur non encore identifié) et verrouille le
+ * comportement EXIGÉ par l'Owner : jamais un statut PLANNING/RUNNING
+ * fantôme — TOUJOURS un FAILED honnête avec une cause exploitable.
+ */
+describe("runStorefrontMission — une exception fatale pendant la planification ne doit JAMAIS laisser la mission bloquée (régression production 06/09/2026)", () => {
+  it("bascule la mission en FAILED avec la cause réelle persistée, jamais un throw non intercepté ni un statut PLANNING fantôme", async () => {
+    fake.planShouldThrowMessage = "Sortie spécialiste non conforme à l'enveloppe attendue (findings/evidence/uncertainties/recommendations/confidence/data) : simulation de test.";
+
+    // §"jamais un throw non intercepté" : l'appel ne doit JAMAIS rejeter —
+    // runStorefrontMission doit TOUJOURS résoudre vers un GraphRunnerOutcome,
+    // exactement comme le fait déjà le chemin "deadlock"/"rôle inconnu".
+    const outcome = await runStorefrontMission("mission1", baseDeps);
+
+    expect(outcome.status).toBe("FAILED");
+    if (outcome.status === "FAILED") {
+      expect(outcome.reason).toContain("simulation de test");
+    }
+
+    // La mission doit avoir RÉELLEMENT basculé en FAILED (markMissionFailed
+    // appelé avec la cause réelle) — jamais restée sur son statut de
+    // création "PLANNING" (le symptôme exact rapporté par l'Owner).
+    expect(fake.status).toBe("FAILED");
+    expect(fake.status).not.toBe("PLANNING");
+    expect(fake.lastError).toContain("simulation de test");
+
+    // Aucun node n'a pu être persisté (addNodes n'est atteint qu'APRÈS un
+    // planInitialGraph réussi) — cohérent avec "Graphe (0 nodes)" observé
+    // en production, mais désormais accompagné d'un FAILED honnête plutôt
+    // que d'un blocage silencieux.
+    expect(fake.nodes.length).toBe(0);
+  });
+
+  it("ne jette jamais l'exception vers l'appelant (contrat GraphRunnerOutcome respecté même en cas d'erreur totalement inattendue)", async () => {
+    fake.planShouldThrowMessage = "Panne totalement inattendue simulée (ex. future régression non encore identifiée).";
+    await expect(runStorefrontMission("mission1", baseDeps)).resolves.toMatchObject({ status: "FAILED", missionId: "mission1" });
   });
 });

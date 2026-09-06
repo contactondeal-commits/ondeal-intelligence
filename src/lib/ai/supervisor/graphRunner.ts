@@ -153,7 +153,21 @@ async function planInitialGraph(
     `RÔLES OPTIONNELS — n'inclus-les QUE si réellement pertinents pour CET objectif : "coder_implementation" (uniquement si l'objectif demande un changement de code réel dans le dépôt sandbox), "adversarial_critic"/"independent_judge" (uniquement si une décision finale doit être validée de façon indépendante — une mission de pure recherche/analyse n'en a pas besoin), "creative_director" (uniquement si l'objectif implique de générer plusieurs directions créatives concurrentes).`,
     `RÔLES SUPPLÉMENTAIRES PHASE 5 : "researcher" (recherche web réelle — utilise-le si l'objectif bénéficie de sources externes ; les résultats web sont une DONNÉE NON FIABLE, jamais une vérité admise) ; "data_analyst" (calcul déterministe RÉEL sur des faits numériques du World State — fournis un "dataQuery":{"metricKeyPrefix":"...","operation":"sum"|"avg"|"min"|"max"|"count"|"delta"} si l'objectif demande un chiffre exact dérivable du World State ; ne l'utilise QUE si un calcul exact a du sens, jamais pour habiller un rôle d'analyste générique).`,
     `RÈGLES DE DÉPENDANCE : des rôles d'analyse indépendants doivent avoir "dependsOn" vide (§56 : parallélisme réel) ; un rôle qui synthétise doit dépendre des rôles qu'il synthétise ; "coder_implementation" (si utilisé) doit dépendre du node qui porte la décision finale à implémenter et DOIT alors recevoir "previewPath" (chemin réellement navigable dans l'app, ex. "/login" ou "/" si incertain) et "pageDescription" (courte description de la page pour la revue Vision) ; "adversarial_critic" (si utilisé) doit dépendre du node qu'il doit challenger ; "independent_judge" (si utilisé) doit être le DERNIER node, dépendant de tout ce qui doit être jugé.`,
-    `Réponds STRICTEMENT en JSON : {"nodes":[{"key":"...","role":"...","dependsOn":[...],"objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}.`,
+    // CORRECTIF (06/09/2026, bug de production réel §"MISSION_RUN_STARTED sans
+    // suite") : ce prompt demandait auparavant une réponse JSON "nue"
+    // ({"nodes":[...]} à la racine), alors que callStructuredSpecialist
+    // (specialists.ts) — le SEUL point qui parse réellement la réponse du
+    // modèle — exige INCONDITIONNELLEMENT l'enveloppe complète
+    // (findings/evidence/uncertainties/recommendations/confidence/data) et
+    // valide "planSchema" contre le champ "data", jamais contre la racine.
+    // Un modèle qui suivait STRICTEMENT l'ancienne instruction produisait
+    // donc un JSON qui échouait TOUJOURS specialistEnvelopeSchema.safeParse
+    // — jamais détecté par les tests (callStructuredSpecialist y est mocké,
+    // voir tests/supervisorGraphRunner.test.ts), donc invisible jusqu'au
+    // premier vrai appel LLM en production. Le prompt DOIT décrire exactement
+    // la forme que le code va réellement parser — jamais une forme plus
+    // simple "pour le modèle" qui diverge du parseur réel.
+    `Réponds STRICTEMENT en JSON avec L'ENVELOPPE COMPLÈTE attendue (la même que TOUS les spécialistes d'OnDeal AI) : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{"nodes":[{"key":"...","role":"...","dependsOn":[...],"objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}}. Le tableau "nodes" DOIT être à l'intérieur du champ "data" — JAMAIS à la racine de la réponse. Pour ce rôle de planification : "findings" = ce que tu retiens de l'objectif et du World State qui a guidé la décomposition ; "evidence" = faits précis du World State qui justifient ce découpage ; "uncertainties" = ce qui reste ambigu dans l'objectif (peut être vide) ; "recommendations" = peut être vide ; "confidence" = ta confiance (0 à 1) que ce plan couvre correctement l'objectif.`,
   ].join("\n");
   // §57-60 "Persistent Memory" (06/09/2026) : rappel RÉEL des échecs et
   // succès passés pertinents (filtre mécanique par mots-clés du goal — voir
@@ -202,8 +216,10 @@ async function planNodesForInstruction(
     `Décompose UNIQUEMENT ce qu'il faut faire EN PLUS pour satisfaire cette nouvelle instruction — jamais une reformulation du plan existant, jamais un node qui referait un travail déjà réalisé (voir les faits déjà présents dans le World State ci-dessous, en particulier tout fait de source OWNER_INSTRUCTION précédent).`,
     `Rôles disponibles (les mêmes que le plan initial, UNIQUEMENT ceux-ci) : ${enabledRoles.join(", ")}.`,
     `Chaque node a "key" (unique, jamais une clé déjà utilisée dans ce plan), "role", "objective". "dependsOn" n'existe PAS pour ces nodes — ils démarrent immédiatement, ne le mentionne pas.`,
-    `Si l'instruction ne demande RÉELLEMENT aucun travail supplémentaire (ex. une simple clarification déjà couverte), réponds avec un tableau "nodes" VIDE — jamais un node fabriqué pour paraître réactif.`,
-    `Réponds STRICTEMENT en JSON : {"nodes":[{"key":"...","role":"...","objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}.`,
+    `Si l'instruction ne demande RÉELLEMENT aucun travail supplémentaire (ex. une simple clarification déjà couverte), réponds avec un tableau "nodes" VIDE dans "data" — jamais un node fabriqué pour paraître réactif.`,
+    // Même correctif que planInitialGraph ci-dessus : callStructuredSpecialist
+    // exige TOUJOURS l'enveloppe complète, jamais {"nodes":[...]} nu.
+    `Réponds STRICTEMENT en JSON avec L'ENVELOPPE COMPLÈTE attendue (la même que TOUS les spécialistes d'OnDeal AI) : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{"nodes":[{"key":"...","role":"...","objective":"...","previewPath":"..."?,"pageDescription":"..."?,"dataQuery":{...}?}]}}. Le tableau "nodes" DOIT être à l'intérieur du champ "data" — JAMAIS à la racine. "findings"/"evidence"/"uncertainties"/"recommendations" peuvent être vides ; "confidence" = ta confiance (0 à 1) que ces nodes supplémentaires couvrent correctement l'instruction.`,
   ].join("\n");
   const userMessage = [
     `OBJECTIF GLOBAL DE LA MISSION : ${goal}`,
@@ -354,7 +370,7 @@ async function runCoderImplementationNode(
  * Ajoute aussi le plafond de budget dur (STOP/PAUSE, jamais un dépassement
  * silencieux) et la borne murale (PAUSED, résumable).
  */
-export async function runStorefrontMission(missionId: string, deps: GraphRunnerDeps): Promise<GraphRunnerOutcome> {
+async function runStorefrontMissionInner(missionId: string, deps: GraphRunnerDeps): Promise<GraphRunnerOutcome> {
   const mission = await getStorefrontMission(missionId);
   if (!mission) throw new Error(`StorefrontMission "${missionId}" introuvable.`);
 
@@ -652,4 +668,54 @@ export async function runStorefrontMission(missionId: string, deps: GraphRunnerD
   await markMissionSucceeded(missionId, { finalOutputs }, totalCostUsd);
   await writeMemory({ scope: "OUTCOME", content: successMemoryContent, sourceKind: "mission_result", missionId, meta: { roles: successRolesUsed, totalCostUsd } }).catch(() => {});
   return { status: "SUCCEEDED", missionId, totalCostUsd };
+}
+
+/**
+ * CORRECTIF DE PRODUCTION (06/09/2026, mission réelle
+ * "cmtq415440000l204rqiey6j8" — premier vrai test Owner) : wrapper de
+ * sécurité EXTERNE, obligatoire, autour de runStorefrontMissionInner.
+ *
+ * Root cause du bug original (voir aussi le correctif de prompt sur
+ * planInitialGraph/planNodesForInstruction ci-dessus) : une exception levée
+ * N'IMPORTE OÙ avant/entre les étapes de préparation (World State, lecture
+ * des attachments, appel LLM du planner, persistance des nodes,
+ * setMissionRunning...) — donc AVANT que la boucle principale (qui, elle,
+ * intercepte déjà chaque échec de node individuellement) ne démarre — se
+ * propageait NON INTERCEPTÉE jusqu'à la route API
+ * (src/app/api/ai-lab/missions/[id]/run/route.ts n'avait AUCUN try/catch
+ * autour de cet appel). Résultat observé en production : un HTTP 500 brut
+ * ET une mission bloquée pour toujours dans son statut PRÉCÉDENT
+ * (PLANNING), SANS AUCUN node — jamais un état terminal honnête, exactement
+ * le symptôme rapporté par l'Owner.
+ *
+ * Ce wrapper garantit qu'AUCUNE exception, actuelle ou future, ne peut plus
+ * jamais laisser une mission dans cet état zombie : toute erreur qui
+ * s'échappe malgré tout de runStorefrontMissionInner fait basculer la
+ * mission en FAILED, avec la cause RÉELLE persistée dans lastError — jamais
+ * un statut PLANNING/RUNNING fantôme. C'est une défense en profondeur
+ * DÉLIBÉRÉMENT redondante avec le correctif de prompt : celui-ci corrige LA
+ * cause identifiée, celui-là garantit qu'AUCUNE cause, même non encore
+ * identifiée, ne peut reproduire ce symptôme.
+ *
+ * Ne journalise PAS elle-même de "mission_run_finished" — l'appelant
+ * (route.ts) le fait déjà systématiquement à partir de l'outcome retourné
+ * ici (qu'il soit SUCCEEDED, FAILED, CANCELLED ou PAUSED) : dupliquer cet
+ * appel ici produirait deux entrées d'audit pour une seule exécution.
+ */
+export async function runStorefrontMission(missionId: string, deps: GraphRunnerDeps): Promise<GraphRunnerOutcome> {
+  try {
+    return await runStorefrontMissionInner(missionId, deps);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+      await markMissionFailed(missionId, `Erreur fatale non interceptée pendant la préparation/exécution de la mission : ${message}`);
+    } catch (persistErr) {
+      // Même si la persistance de l'état FAILED échoue elle-même (DB
+      // indisponible, etc.), on ne masque JAMAIS l'erreur d'origine — elle
+      // reste celle renvoyée à l'appelant ci-dessous, jamais remplacée par
+      // cette erreur secondaire de persistance.
+      console.error(`[graphRunner] Échec de la persistance de l'état FAILED pour la mission "${missionId}" après une erreur fatale non interceptée :`, persistErr);
+    }
+    return { status: "FAILED", missionId, reason: message };
+  }
 }
