@@ -101,7 +101,14 @@ export const judgeDataSchema = z.object({
   evidenceReviewed: z.array(z.string()),
 });
 
-function extractJson(text: string): unknown {
+/**
+ * §51 "Experiment Mode" (06/09/2026) réutilise ce même parseur strict pour
+ * noter une variante (voir experiments/run.ts::scoreVariantOutput) — exporté
+ * plutôt que dupliqué : "un JSON non conforme lève, jamais une donnée
+ * inventée" doit rester une SEULE implémentation, jamais deux logiques de
+ * parsing JSON qui pourraient diverger silencieusement.
+ */
+export function extractJson(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = fenced ? fenced[1]! : text;
   try {

@@ -15,7 +15,7 @@ import { callWithStepUp } from "@/app/ai-lab/stepUp";
  * connecteur NOT_CONFIGURED s'affiche tel quel, jamais masqué.
  */
 
-type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "policy" | "audit";
+type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "policy" | "audit";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "composer", label: "Composer" },
@@ -25,6 +25,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "models", label: "Models" },
   { id: "agents", label: "Agents" },
   { id: "memory", label: "Memory" },
+  { id: "experiments", label: "Experiments" },
   { id: "policy", label: "Owner Control Center" },
   { id: "audit", label: "Audit" },
 ];
@@ -222,6 +223,7 @@ export default function AiLabConsole({ ownerEmail }: { ownerEmail: string }) {
         {tab === "models" && <ModelsTab onError={setError} />}
         {tab === "agents" && <AgentsTab onError={setError} />}
         {tab === "memory" && <MemoryTab onError={setError} />}
+        {tab === "experiments" && <ExperimentsTab onError={setError} />}
         {tab === "policy" && <PolicyTab policy={policy} onChanged={refreshPolicy} onError={setError} />}
         {tab === "audit" && <AuditTab onError={setError} />}
       </main>
@@ -999,6 +1001,216 @@ function MemoryTab({ onError }: { onError: (e: string) => void }) {
           </div>
         ))}
         {records.length === 0 && <p style={{ color: "var(--color-text-faint)" }}>Aucun enregistrement pour ce filtre.</p>}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EXPERIMENTS — Experiment Mode réel (§51-53) : A/B/... sur objectif réel,
+// jugé par un juge indépendant, jamais un gagnant simulé.
+// ---------------------------------------------------------------------------
+interface ExperimentVariantView {
+  id: string;
+  label: string;
+  provider: string | null;
+  model: string | null;
+  promptVariant: string | null;
+  outputText: string | null;
+  costUsd: number | null;
+  latencyMs: number | null;
+  score: number | null;
+  scoreReason: string | null;
+}
+interface ExperimentSummaryView {
+  id: string;
+  objective: string;
+  dimension: string;
+  status: string;
+  winnerVariantId: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+  variants: ExperimentVariantView[];
+}
+interface VariantFormRow {
+  label: string;
+  provider: "" | "anthropic" | "openai";
+  model: string;
+  promptVariant: string;
+}
+
+function newVariantRow(label: string): VariantFormRow {
+  return { label, provider: "", model: "", promptVariant: "" };
+}
+
+function ExperimentsTab({ onError }: { onError: (e: string) => void }) {
+  const [experiments, setExperiments] = useState<ExperimentSummaryView[]>([]);
+  const [selected, setSelected] = useState<ExperimentSummaryView | null>(null);
+  const [objective, setObjective] = useState("");
+  const [dimension, setDimension] = useState<"MODEL" | "PROMPT" | "STRATEGY" | "AGENT">("MODEL");
+  const [rows, setRows] = useState<VariantFormRow[]>([newVariantRow("A"), newVariantRow("B")]);
+  const [launching, setLaunching] = useState(false);
+
+  const refresh = useCallback(() => {
+    callWithStepUp<{ experiments: ExperimentSummaryView[] }>("/api/ai-lab/experiments")
+      .then((r) => setExperiments(r.experiments))
+      .catch((e) => onError(String(e)));
+  }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  function updateRow(i: number, patch: Partial<VariantFormRow>) {
+    setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  }
+  function addRow() {
+    const nextLabel = String.fromCharCode(65 + rows.length); // A, B, C, ...
+    setRows((prev) => [...prev, newVariantRow(nextLabel)]);
+  }
+  function removeRow(i: number) {
+    if (rows.length <= 2) return; // §51 : au moins 2 variantes, jamais un A/B à un seul bras
+    setRows((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  async function launch() {
+    setLaunching(true);
+    try {
+      const variants = rows.map((r) => ({
+        label: r.label,
+        provider: r.provider || undefined,
+        model: r.model.trim() || undefined,
+        promptVariant: r.promptVariant.trim() || undefined,
+      }));
+      const created = await callWithStepUp<{ experiment: ExperimentSummaryView }>("/api/ai-lab/experiments", {
+        method: "POST",
+        body: JSON.stringify({ objective, dimension, variants }),
+      });
+      setSelected(created.experiment);
+      refresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLaunching(false);
+    }
+  }
+
+  async function open(id: string) {
+    try {
+      const r = await callWithStepUp<{ experiment: ExperimentSummaryView }>(`/api/ai-lab/experiments/${id}`);
+      setSelected(r.experiment);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  return (
+    <div style={{ display: "grid", gap: "var(--space-5)" }}>
+      <div style={cardStyle}>
+        <h2 style={{ margin: 0, fontSize: 15 }}>Nouvel Experiment</h2>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>
+          Compare au moins 2 configurations réelles sur LE MÊME objectif — chaque variante fait un vrai appel modèle, un juge indépendant note chaque sortie 0-100 (jamais un gagnant simulé, jamais un variant qui s&apos;auto-évalue).
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 200px", gap: 10, marginTop: 12 }}>
+          <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            Objectif (identique pour toutes les variantes)
+            <textarea value={objective} onChange={(e) => setObjective(e.target.value)} rows={3} placeholder='Ex. "Rédige une description produit pour ce t-shirt, en français, orientée conversion."' style={{ ...inputStyle, marginTop: 4, resize: "vertical" }} />
+          </label>
+          <label style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            Dimension comparée
+            <select value={dimension} onChange={(e) => setDimension(e.target.value as typeof dimension)} style={{ ...inputStyle, marginTop: 4 }}>
+              <option value="MODEL">MODEL (provider/modèle)</option>
+              <option value="PROMPT">PROMPT (instruction)</option>
+              <option value="STRATEGY">STRATEGY</option>
+              <option value="AGENT">AGENT</option>
+            </select>
+          </label>
+        </div>
+
+        <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+          {rows.map((r, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "60px 140px 1fr 1fr 32px", gap: 8, alignItems: "start" }}>
+              <input value={r.label} onChange={(e) => updateRow(i, { label: e.target.value })} style={inputStyle} placeholder="Label" />
+              <select value={r.provider} onChange={(e) => updateRow(i, { provider: e.target.value as VariantFormRow["provider"] })} style={inputStyle}>
+                <option value="">(défaut système)</option>
+                <option value="anthropic">anthropic</option>
+                <option value="openai">openai</option>
+              </select>
+              <input value={r.model} onChange={(e) => updateRow(i, { model: e.target.value })} placeholder="Modèle (optionnel, sinon défaut)" style={inputStyle} />
+              <input value={r.promptVariant} onChange={(e) => updateRow(i, { promptVariant: e.target.value })} placeholder="Consigne de variante (PROMPT/STRATEGY)" style={inputStyle} />
+              <button disabled={rows.length <= 2} onClick={() => removeRow(i)} style={{ ...secondaryButtonStyle, padding: "6px 8px" }} title="Retirer cette variante">✕</button>
+            </div>
+          ))}
+          <button style={{ ...secondaryButtonStyle, width: "fit-content" }} onClick={addRow}>+ Ajouter une variante</button>
+        </div>
+
+        <button disabled={launching || !objective.trim() || rows.some((r) => !r.label.trim())} style={{ ...buttonStyle, marginTop: 14 }} onClick={launch}>
+          {launching ? "Exécution réelle en cours…" : "Lancer l'Experiment"}
+        </button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: "var(--space-5)" }}>
+        <div style={cardStyle}>
+          <h3 style={{ margin: 0, fontSize: 14 }}>Historique ({experiments.length})</h3>
+          <div style={{ marginTop: 10, display: "grid", gap: 6, maxHeight: 500, overflowY: "auto" }}>
+            {experiments.map((e) => (
+              <button
+                key={e.id}
+                onClick={() => open(e.id)}
+                style={{ textAlign: "left", background: selected?.id === e.id ? "var(--color-surface-alt)" : "transparent", border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: 8, cursor: "pointer", color: "var(--color-text)" }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.objective}</div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <Badge tone={healthTone(e.status)}>{e.status}</Badge>
+                  <span style={{ fontSize: 11, color: "var(--color-text-faint)" }}>{e.dimension} · {e.variants.length} variantes</span>
+                </div>
+              </button>
+            ))}
+            {experiments.length === 0 && <p style={{ fontSize: 12, color: "var(--color-text-faint)" }}>Aucun Experiment encore.</p>}
+          </div>
+        </div>
+
+        <div style={cardStyle}>
+          {!selected && <p style={{ color: "var(--color-text-faint)" }}>Sélectionnez un Experiment pour voir les variantes notées.</p>}
+          {selected && (
+            <div>
+              <h3 style={{ margin: 0, fontSize: 15 }}>{selected.objective}</h3>
+              <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center" }}>
+                <Badge tone={healthTone(selected.status)}>{selected.status}</Badge>
+                <span style={{ fontSize: 12, color: "var(--color-text-faint)" }}>{selected.dimension}</span>
+              </div>
+              <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+                {selected.variants
+                  .slice()
+                  .sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
+                  .map((v) => (
+                    <div key={v.id} style={{ border: v.id === selected.winnerVariantId ? "2px solid var(--color-success)" : "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: 10 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <strong style={{ fontSize: 13 }}>
+                          Variante {v.label} {v.id === selected.winnerVariantId && <Badge tone="ok">GAGNANT</Badge>}
+                        </strong>
+                        <span style={{ fontSize: 12, color: "var(--color-text-faint)" }}>
+                          {v.provider ?? "—"}/{v.model ?? "—"} {v.latencyMs != null && `· ${(v.latencyMs / 1000).toFixed(1)}s`} {v.costUsd != null && `· ${v.costUsd.toFixed(4)} USD`}
+                        </span>
+                      </div>
+                      {v.score != null && (
+                        <p style={{ fontSize: 13, fontWeight: 700, marginTop: 6, color: v.score >= 70 ? "var(--color-success)" : v.score >= 40 ? "var(--color-warning)" : "var(--color-danger)" }}>
+                          Score : {v.score}/100
+                        </p>
+                      )}
+                      {v.scoreReason && <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>{v.scoreReason}</p>}
+                      {v.outputText && (
+                        <details style={{ marginTop: 6 }}>
+                          <summary style={{ fontSize: 11, cursor: "pointer", color: "var(--color-text-faint)" }}>Voir la sortie complète</summary>
+                          <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6, whiteSpace: "pre-wrap" }}>{v.outputText}</p>
+                        </details>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
