@@ -725,3 +725,49 @@ model JobArtifact {
   @@index([jobId])
   @@map("job_artifacts")
 }
+
+// ============================================================================
+// ONDEAL AI CORE — PHASE 2 : Model Router + Gauntlet, fondation (06/09/2026).
+//
+// ModelEvalRun/ModelEvalResult sont DÉLIBÉRÉMENT sans storeId : ce ne sont
+// pas des données client (aucune donnée de boutique n'y transite — voir
+// src/lib/ai/models/tasks.ts, jeu de tâches synthétique fixe), mais une
+// télémétrie interne "quel modèle Anthropic répond le mieux/moins cher à un
+// jeu de contraintes fixe" — comparable à un banc d'essai, pas à une donnée
+// multi-tenant. Rester cohérent avec la règle d'isolation stricte du reste
+// du schéma (voir en-tête de ce fichier) : c'est précisément PARCE QUE ce
+// n'est pas une donnée de boutique qu'elle n'a pas à être scopée par store.
+// Le déclenchement (qui a lancé le run, depuis quelle boutique) reste tracé
+// dans AuditLog, pas dupliqué ici.
+model ModelEvalRun {
+  id          String   @id @default(cuid())
+  taskSetName String   // ex. "grounding_v1" — voir tasks.ts ; string libre, jamais un enum figé (même principe que Job.type)
+  createdAt   DateTime @default(now())
+
+  results ModelEvalResult[]
+
+  @@index([taskSetName, createdAt])
+  @@map("model_eval_runs")
+}
+
+model ModelEvalResult {
+  id         String   @id @default(cuid())
+  runId      String
+  provider   String   // "anthropic" — voir src/lib/ai/providers/provider.ts
+  model      String
+  taskName   String   // voir ModelEvalTask.name dans tasks.ts
+  passed     Boolean
+  reason     String?  // motif du échec/succès mécanique — jamais un jugement subjectif
+  latencyMs  Int
+  tokensIn   Int?
+  tokensOut  Int?
+  costUsd    Float?   // voir src/lib/ai/models/cost.ts — jamais estimé, null si un ingrédient réel manque
+  textSample String?  // sortie brute tronquée (audit humain) — jamais le texte complet, jamais une donnée client
+  createdAt  DateTime @default(now())
+
+  run ModelEvalRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([provider, model, taskName, createdAt]) // pour le Router : agréger le taux de réussite/coût par (provider, model, taskName)
+  @@map("model_eval_results")
+}
