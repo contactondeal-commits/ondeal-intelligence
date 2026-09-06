@@ -1,7 +1,3 @@
-import { PDFParse } from "pdf-parse";
-import * as mammoth from "mammoth";
-import * as XLSX from "xlsx";
-
 /**
  * ONDEAL AI CORE — PHASE 5 : File Intelligence — extraction RÉELLE (06/09/2026).
  *
@@ -15,6 +11,20 @@ import * as XLSX from "xlsx";
  * plusieurs Mo ne doit jamais faire exploser le contexte modèle envoyé au
  * planner (graphRunner.ts::planInitialGraph) ; le texte est tronqué avec un
  * indicateur explicite, jamais silencieusement coupé sans le dire.
+ *
+ * CORRECTIF PRODUCTION (06/09/2026, découvert par smoke test réel post-
+ * déploiement) : `pdf-parse`/`mammoth`/`xlsx` sont désormais importés en
+ * DYNAMIQUE (à l'intérieur de `parseAttachment`), jamais en statique en
+ * tête de fichier. Cause réelle observée : `GET /api/ai-lab/tools` (qui
+ * n'importe que `PARSER_SUPPORT`, un simple tableau de chaînes) et
+ * `GET /api/ai-lab/missions` (via attachments/store.ts) renvoyaient 500 en
+ * production Vercel — jamais reproduit en local (`next start`) — alors
+ * qu'aucune route ne fait réellement appel à `parseAttachment` dans ce
+ * chemin. Un import statique de ces bibliothèques suffisait à faire
+ * échouer l'évaluation du module au cold-start Vercel. Import paresseux =
+ * ces bibliothèques ne se chargent que lorsqu'un attachement est
+ * RÉELLEMENT analysé, jamais comme effet de bord de la simple lecture de
+ * `PARSER_SUPPORT`.
  */
 
 export const PARSER_SUPPORT = ["PDF", "DOCX", "XLSX", "CSV", "JSON", "TXT", "MD"] as const;
@@ -57,6 +67,7 @@ export async function parseAttachment(kind: ParsedKind, buffer: Buffer): Promise
   try {
     switch (kind) {
       case "PDF": {
+        const { PDFParse } = await import("pdf-parse");
         const parser = new PDFParse({ data: buffer });
         try {
           const result = await parser.getText();
@@ -66,10 +77,12 @@ export async function parseAttachment(kind: ParsedKind, buffer: Buffer): Promise
         }
       }
       case "DOCX": {
+        const mammoth = await import("mammoth");
         const result = await mammoth.extractRawText({ buffer });
         return { status: "PARSED", extractedText: truncate(result.value), error: null };
       }
       case "XLSX": {
+        const XLSX = await import("xlsx");
         const workbook = XLSX.read(buffer, { type: "buffer" });
         const parts = workbook.SheetNames.map((name) => {
           const sheet = workbook.Sheets[name];
