@@ -49,6 +49,7 @@ const CHECKS: Check[] = [
   { label: "/owner-auth (page WebAuthn, jamais 500)", path: "/owner-auth", expectStatus: [200] },
   { label: "/ai-lab sans session Owner → redirection (jamais 200 ni 500)", path: "/ai-lab", expectStatus: [307, 308] },
   { label: "Route inconnue → 404 réel", path: "/does-not-exist-e2e-smoke", expectStatus: [404] },
+  { label: "GET /api/health (public, sonde d'observabilité réelle — DB + commit déployé) → 200, base réelle saine", path: "/api/health", expectStatus: [200] },
 
   { label: "GET /api/ai-lab/missions sans session → 403 (jamais un flux/liste ouvert)", path: "/api/ai-lab/missions", expectStatus: [403] },
   { label: "GET /api/ai-lab/experiments sans session → 403", path: "/api/ai-lab/experiments", expectStatus: [403] },
@@ -60,6 +61,7 @@ const CHECKS: Check[] = [
   { label: "GET /api/ai-lab/connectors sans session → 403", path: "/api/ai-lab/connectors", expectStatus: [403] },
   { label: "GET /api/ai-lab/models sans session → 403", path: "/api/ai-lab/models", expectStatus: [403] },
   { label: "GET /api/ai-lab/outcomes sans session → 403 (Outcome/ROI Engine)", path: "/api/ai-lab/outcomes", expectStatus: [403] },
+  { label: "GET /api/ai-lab/observability sans session → 403 (santé opérationnelle réservée Owner)", path: "/api/ai-lab/observability", expectStatus: [403] },
   { label: "GET /api/ai-lab/missions/x/stream sans session → 403 (jamais un flux SSE ouvert)", path: "/api/ai-lab/missions/e2e-smoke-fake-id/stream", expectStatus: [403] },
   { label: "GET /api/owner/sessions sans session → 401", path: "/api/owner/sessions", expectStatus: [401] },
   { label: "GET /api/cron/sync sans secret → 401", path: "/api/cron/sync", expectStatus: [401] },

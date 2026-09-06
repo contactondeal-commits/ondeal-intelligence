@@ -15,7 +15,7 @@ import { callWithStepUp } from "@/app/ai-lab/stepUp";
  * connecteur NOT_CONFIGURED s'affiche tel quel, jamais masqué.
  */
 
-type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "evolution" | "images" | "outcomes" | "policy" | "audit";
+type Tab = "composer" | "missions" | "tools" | "connectors" | "models" | "agents" | "memory" | "experiments" | "evolution" | "images" | "outcomes" | "observability" | "policy" | "audit";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "composer", label: "Composer" },
@@ -29,6 +29,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "evolution", label: "Evolution" },
   { id: "images", label: "Images" },
   { id: "outcomes", label: "Outcomes" },
+  { id: "observability", label: "Observability" },
   { id: "policy", label: "Owner Control Center" },
   { id: "audit", label: "Audit" },
 ];
@@ -230,6 +231,7 @@ export default function AiLabConsole({ ownerEmail }: { ownerEmail: string }) {
         {tab === "evolution" && <EvolutionTab onError={setError} />}
         {tab === "images" && <ImagesTab onError={setError} />}
         {tab === "outcomes" && <OutcomesTab onError={setError} />}
+        {tab === "observability" && <ObservabilityTab onError={setError} />}
         {tab === "policy" && <PolicyTab policy={policy} onChanged={refreshPolicy} onError={setError} />}
         {tab === "audit" && <AuditTab onError={setError} />}
       </main>
@@ -1078,6 +1080,105 @@ function OutcomesTab({ onError }: { onError: (e: string) => void }) {
         <p style={{ fontSize: 11, color: "var(--color-text-faint)", marginTop: 4 }}>
           Taux de victoire (win rate) : écart honnête — aucun champ « variante de contrôle » structuré n&apos;existe encore pour le calculer réellement, jamais un taux inventé ici.
         </p>
+      </div>
+    </div>
+  );
+}
+
+interface ObservabilitySummaryView {
+  sync: {
+    last24h: { total: number; byStatus: Record<string, number> };
+    staleConnectedIntegrations: Array<{ storeId: string; storeName: string; provider: string; lastSyncedAt: string | null }>;
+  };
+  aiLabAudit: { last24h: { total: number; byResultStatus: Record<string, number>; failureRatePct: number | null } };
+  jobs: { byStatus: Record<string, number>; failedLast24h: number };
+  coderMissions: { byStatus: Record<string, number>; failedLast24h: number; stuck: Array<{ id: string; goal: string; status: string; startedAt: string | null }> };
+  storefrontMissions: { byStatus: Record<string, number>; failedLast24h: number; stuck: Array<{ id: string; goal: string; status: string; startedAt: string | null }> };
+  generatedAt: string;
+}
+
+function ObservabilityTab({ onError }: { onError: (e: string) => void }) {
+  const [summary, setSummary] = useState<ObservabilitySummaryView | null>(null);
+
+  const refresh = useCallback(() => {
+    callWithStepUp<{ summary: ObservabilitySummaryView }>("/api/ai-lab/observability").then((r) => setSummary(r.summary)).catch((e) => onError(String(e)));
+  }, [onError]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (!summary) return <p style={{ color: "var(--color-text-faint)" }}>Chargement…</p>;
+
+  const stuckMissions = [...summary.coderMissions.stuck.map((m) => ({ ...m, kind: "Coder" })), ...summary.storefrontMissions.stuck.map((m) => ({ ...m, kind: "Supervisor" }))];
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+          Santé opérationnelle RÉELLE de la plateforme (jamais un résultat métier — voir l&apos;onglet Outcomes pour ça) — dernier calcul :{" "}
+          {new Date(summary.generatedAt).toLocaleString("fr-FR")}.
+        </p>
+        <button type="button" onClick={refresh} className="btn btn-secondary btn-sm">Rafraîchir</button>
+      </div>
+
+      <div style={cardStyle}>
+        <strong style={{ fontSize: 13 }}>Synchronisation catalogue (24h)</strong>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>{summary.sync.last24h.total} exécution(s) de synchro sur les dernières 24h.</p>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+          {Object.entries(summary.sync.last24h.byStatus).map(([status, count]) => (
+            <Badge key={status} tone={status === "success" ? "ok" : status === "error" ? "err" : status === "partial" ? "warn" : "info"}>{status} · {count}</Badge>
+          ))}
+          {summary.sync.last24h.total === 0 && <span style={{ fontSize: 12, color: "var(--color-text-faint)" }}>Aucune synchro sur les dernières 24h.</span>}
+        </div>
+        {summary.sync.staleConnectedIntegrations.length > 0 ? (
+          <div style={{ marginTop: 8 }}>
+            <span style={{ fontSize: 12, color: "var(--color-danger)" }}>⚠ Intégrations connectées jamais synchronisées ou en retard de plus de 48h :</span>
+            <ul style={{ margin: "4px 0 0 16px", fontSize: 12, color: "var(--color-text-muted)" }}>
+              {summary.sync.staleConnectedIntegrations.map((i) => (
+                <li key={`${i.storeId}-${i.provider}`}>{i.storeName} · {i.provider} · dernière synchro : {i.lastSyncedAt ? new Date(i.lastSyncedAt).toLocaleString("fr-FR") : "jamais"}</li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p style={{ fontSize: 12, color: "var(--color-success)", marginTop: 8 }}>✓ Aucune intégration connectée en retard de synchro.</p>
+        )}
+      </div>
+
+      <div style={cardStyle}>
+        <strong style={{ fontSize: 13 }}>AI Lab Audit (24h)</strong>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
+          {summary.aiLabAudit.last24h.total} action(s) tracée(s) · taux d&apos;échec {pct(summary.aiLabAudit.last24h.failureRatePct)}
+        </p>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+          {Object.entries(summary.aiLabAudit.last24h.byResultStatus).map(([status, count]) => (
+            <Badge key={status} tone={status === "SUCCESS" ? "ok" : status === "FAILURE" ? "err" : "warn"}>{status} · {count}</Badge>
+          ))}
+        </div>
+      </div>
+
+      <div style={cardStyle}>
+        <strong style={{ fontSize: 13 }}>Job Engine &amp; Missions</strong>
+        <p style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 6 }}>
+          Jobs : {summary.jobs.failedLast24h} échec(s) sur 24h · Coder Missions : {summary.coderMissions.failedLast24h} échec(s) sur 24h · Storefront Missions : {summary.storefrontMissions.failedLast24h} échec(s) sur 24h
+        </p>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+          {Object.entries(summary.jobs.byStatus).map(([status, count]) => (
+            <Badge key={`job-${status}`} tone={status === "SUCCEEDED" ? "ok" : status === "FAILED" ? "err" : "info"}>Job {status} · {count}</Badge>
+          ))}
+        </div>
+        {stuckMissions.length > 0 ? (
+          <div style={{ marginTop: 8 }}>
+            <span style={{ fontSize: 12, color: "var(--color-danger)" }}>⚠ Mission(s) potentiellement bloquée(s) (RUNNING/PLANNING depuis plus de 2h) :</span>
+            <ul style={{ margin: "4px 0 0 16px", fontSize: 12, color: "var(--color-text-muted)" }}>
+              {stuckMissions.map((m) => (
+                <li key={m.id}>{m.kind} · {m.goal} · {m.status} · démarrée {m.startedAt ? new Date(m.startedAt).toLocaleString("fr-FR") : "—"}</li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p style={{ fontSize: 12, color: "var(--color-success)", marginTop: 8 }}>✓ Aucune mission bloquée détectée.</p>
+        )}
       </div>
     </div>
   );
