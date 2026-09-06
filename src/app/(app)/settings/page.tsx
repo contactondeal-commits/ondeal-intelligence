@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import AppShell from "@/components/AppShell";
 import BillingPanel from "@/components/BillingPanel";
 import AccountDataActions from "@/components/AccountDataActions";
-import { PLAN_FEATURES } from "@/lib/plan-limits";
+import { PLAN_FEATURES, isFeatureBuilt } from "@/lib/plan-limits";
 import { isStripeConfigured } from "@/lib/integrations/stripe-billing";
 
 const FEATURE_LABEL: Record<string, string> = {
@@ -141,11 +141,22 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </div>
           </dl>
           <div className="feature-chips">
-            {features.map((f) => (
-              <span key={f} className="rail-chip is-active">
-                {FEATURE_LABEL[f] ?? f}
-              </span>
-            ))}
+            {features.map((f) =>
+              isFeatureBuilt(f) ? (
+                <span key={f} className="rail-chip is-active">
+                  {FEATURE_LABEL[f] ?? f}
+                </span>
+              ) : (
+                // FINAL PHASE — intégrité réelle (06/09/2026) : inclus au
+                // tarif de ce plan, mais AUCUNE fonctionnalité réelle
+                // n'existe encore derrière ce libellé (voir
+                // plan-limits.ts::UNBUILT_FEATURES) — jamais présenté comme
+                // "actif" à un marchand payant tant que ce n'est pas vrai.
+                <span key={f} className="rail-chip" title="Inclus dans ce plan, disponible prochainement">
+                  {FEATURE_LABEL[f] ?? f} <span className="cell-sub">(bientôt)</span>
+                </span>
+              ),
+            )}
           </div>
           <BillingPanel
             storeId={store.id}
