@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GenerateRequest, GenerateResult, ModelProvider } from "@/lib/ai/providers/provider";
 import { z } from "zod";
 import { analystSystemPrompt, callStructuredSpecialist, criticDataSchema, extractJson, judgeDataSchema } from "@/lib/ai/supervisor/specialists";
 
@@ -173,6 +174,108 @@ describe("extractJson — root cause réelle (fence non ancré + troncature max_
   it("refuse un JSON complet mais dont le champ data ne respecte pas le schéma du rôle — vérifié au niveau callStructuredSpecialist, pas extractJson (voir describe ci-dessus)", async () => {
     const provider = fakeProvider(envelope({ verdict: "PASS" })); // rejectionCase manquant
     await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema)).rejects.toThrow(/rôle/);
+  });
+});
+
+/**
+ * RÉGRESSION — CORRECTIF ARCHITECTURAL, 5e panne réelle de la même chaîne
+ * (06/09/2026), couche d'EXÉCUTION des spécialistes (après que le correctif
+ * du planner, déjà verrouillé ci-dessus dans supervisorGraphRunner.test.ts,
+ * ait permis au graphe d'obtenir >0 nodes) : plusieurs nodes réels
+ * (researcher, adversarial_critic, ux_architect, performance_reviewer)
+ * échouaient ENCORE avec "pas un JSON valide" / troncature max_tokens,
+ * malgré le budget déjà relevé pour le planner. Verrouille la détection
+ * DÉFINITIVE via le signal RÉEL du provider (stop_reason/finish_reason
+ * normalisé en "max_tokens", provider.ts) — jamais seulement l'heuristique
+ * de fence non refermé (qui reste un FILET DE SÉCURITÉ, testé séparément
+ * ci-dessous) — et la reprise contrôlée UNE SEULE FOIS avec budget doublé +
+ * consigne de concision, jamais une réparation du JSON partiel ni une
+ * boucle non bornée.
+ */
+describe("callStructuredSpecialist — détection de troncature via stop_reason et reprise contrôlée (5e panne production 06/09/2026)", () => {
+  function providerWithGenerate(generate: ModelProvider["generate"]): ModelProvider {
+    return {
+      name: "anthropic",
+      capabilities: () => ({ maxContextTokens: 200_000, vision: false, toolUse: true, costPerMTokIn: 1, costPerMTokOut: 5 }),
+      generate,
+    };
+  }
+
+  it("reprise contrôlée UNE SEULE FOIS après troncature confirmée par stop_reason=max_tokens : succès si la reprise est complète, tokens/coût agrégés sur les DEUX tentatives", async () => {
+    // Reproduction fidèle de la classe de panne réelle : fence ouvert, jamais
+    // refermé, coupure en plein milieu d'une valeur — mais cette fois
+    // accompagné du signal RÉEL du provider (stop_reason=max_tokens),
+    // jamais seulement deviné après coup sur le texte.
+    const truncatedText =
+      '```json\n{ "findings": [ "a" ], "evidence": [ "b" ], "uncertainties": [], "recommendations": [], "confidence": 0.7, "data": { "verdict": "PASS", "blockingIssues": [], "weak';
+    const completeText = envelope({ verdict: "PASS", blockingIssues: [], weaknesses: [], rejectionCase: "x" });
+    let callCount = 0;
+    const generate = vi.fn(async (_req: GenerateRequest): Promise<GenerateResult> => {
+      callCount++;
+      if (callCount === 1) return { text: truncatedText, citations: [], tokensIn: 500, tokensOut: 400, stopReason: "max_tokens" };
+      return { text: completeText, citations: [], tokensIn: 300, tokensOut: 150, stopReason: "end_turn" };
+    });
+    const provider = providerWithGenerate(generate);
+
+    const result = await callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000);
+
+    expect(generate).toHaveBeenCalledTimes(2);
+    expect(result.output.data.verdict).toBe("PASS");
+    // La reprise doit RÉELLEMENT porter un rappel de concision + un budget
+    // doublé (jamais un simple retry muet du même prompt/budget qui
+    // échouerait à nouveau de façon identique).
+    const secondCallArgs = generate.mock.calls[1]![0] as GenerateRequest;
+    expect(secondCallArgs.system).toMatch(/TRONQUÉE/);
+    expect(secondCallArgs.system).toMatch(/BRIÈVETÉ/i);
+    expect(secondCallArgs.maxTokens).toBe(4000); // 2000 doublé, sous MAX_RETRY_TOKENS
+    // Coût/tokens réels agrégés sur LES DEUX tentatives — jamais seulement
+    // la dernière (la première tentative tronquée a un coût bien réel elle
+    // aussi, jamais silencieusement perdu).
+    expect(result.tokensIn).toBe(500 + 300);
+    expect(result.tokensOut).toBe(400 + 150);
+  });
+
+  it("refuse explicitement (jamais un JSON réparé/deviné) si la reprise est ELLE AUSSI tronquée (stop_reason=max_tokens confirmé deux fois) — jamais plus d'une seule reprise (pas de boucle non bornée)", async () => {
+    const stillTruncated = '```json\n{ "findings": [ "a"';
+    const generate = vi.fn(async (_req: GenerateRequest): Promise<GenerateResult> => ({
+      text: stillTruncated,
+      citations: [],
+      tokensIn: 500,
+      tokensOut: 400,
+      stopReason: "max_tokens",
+    }));
+    const provider = providerWithGenerate(generate);
+
+    await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000)).rejects.toThrow(
+      /stop_reason=max_tokens/i,
+    );
+    await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000)).rejects.toThrow(
+      /MÊME APRÈS/i,
+    );
+    // Exactement 2 tentatives PAR APPEL (les deux `await expect` ci-dessus
+    // relancent chacun un cycle complet) — jamais une 3e tentative, jamais
+    // une boucle non bornée.
+    expect(generate).toHaveBeenCalledTimes(4);
+  });
+
+  it("filet de sécurité conservé : un provider qui NE rapporte PAS stop_reason (undefined) retombe sur l'heuristique existante d'extractJson (fence ouvert non refermé) — AUCUNE reprise déclenchée à tort (le signal ne dit jamais explicitement 'max_tokens')", async () => {
+    const truncatedNoSignal = '```json\n{ "findings": [ "a"';
+    const generate = vi.fn(async (_req: GenerateRequest): Promise<GenerateResult> => ({ text: truncatedNoSignal, citations: [], tokensIn: 500, tokensOut: 400 }));
+    const provider = providerWithGenerate(generate);
+
+    await expect(callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000)).rejects.toThrow(/JSON valide/);
+    expect(generate).toHaveBeenCalledTimes(1); // aucune reprise déclenchée : stop_reason n'a jamais dit "max_tokens".
+  });
+
+  it("faux positif évité (§10 du mandat) : une réponse VALIDE et COMPLÈTE proche de la limite de tokens, avec un stop_reason autre que max_tokens, n'est JAMAIS reprise inutilement", async () => {
+    const completeNearLimit = envelope({ verdict: "PASS", blockingIssues: [], weaknesses: [], rejectionCase: "x".repeat(200) });
+    const generate = vi.fn(async (_req: GenerateRequest): Promise<GenerateResult> => ({ text: completeNearLimit, citations: [], tokensIn: 500, tokensOut: 1990, stopReason: "end_turn" }));
+    const provider = providerWithGenerate(generate);
+
+    const result = await callStructuredSpecialist(provider, "storefront_critic_v1", "system", "user", criticDataSchema, 2000);
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(result.output.data.verdict).toBe("PASS");
   });
 });
 

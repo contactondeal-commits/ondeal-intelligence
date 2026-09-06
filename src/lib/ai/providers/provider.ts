@@ -90,6 +90,24 @@ export interface GenerateResult {
    * coup.
    */
   failoverAttempts?: Array<{ provider: string; model: string; failureCategory: string; message: string }>;
+  /**
+   * CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle de la chaîne
+   * planner/spécialiste → JSON) : signal RÉEL et EXPLICITE du provider disant
+   * pourquoi la génération s'est arrêtée — jamais une heuristique déduite du
+   * texte reçu après coup (l'ancienne approche, "fence Markdown jamais
+   * refermé", pouvait seulement SUPPOSER une troncature ; ce champ permet de
+   * la CONFIRMER avec certitude). Normalisé à la valeur "max_tokens" par
+   * TOUS les providers quand la génération s'est arrêtée à cause de la
+   * limite de tokens (Anthropic : `stop_reason === "max_tokens"`, cf.
+   * platform.claude.com/docs/en/build-with-claude/handling-stop-reasons,
+   * vérifié le 06/09/2026 ; OpenAI Chat Completions : `finish_reason ===
+   * "length"`, mappé vers la même valeur "max_tokens" pour que l'appelant
+   * (callStructuredSpecialist, specialists.ts) n'ait jamais à connaître la
+   * convention propre à chaque provider). `null`/`undefined` si le provider
+   * ne rapporte pas cette information ou si la génération s'est terminée
+   * normalement — jamais fabriqué quand absent.
+   */
+  stopReason?: string | null;
 }
 
 export interface ModelProvider {

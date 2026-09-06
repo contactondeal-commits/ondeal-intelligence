@@ -141,6 +141,29 @@ export const judgeDataSchema = z.object({
  * caractères (au lieu de 300) — suffisant pour voir la coupure réelle d'une
  * troncature, jamais juste le tout début.
  */
+/**
+ * §"BRIÈVETÉ" — CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle,
+ * couche d'exécution des spécialistes après le correctif du planner) :
+ * SOURCE UNIQUE de la contrainte de longueur imposée à TOUS les rôles
+ * (planner ET catalogue de spécialistes, catalogue.ts) — jamais une consigne
+ * de brièveté réécrite à la main dans chaque prompt (ce qui a déjà dérivé
+ * silencieusement une fois : le planner l'imposait, aucun rôle de
+ * catalogue.ts ne le faisait, d'où la 5e panne). "data" reste désigné comme
+ * la seule partie réellement exploitée par le code — jamais sacrifiée à une
+ * prose longue dans findings/evidence.
+ */
+export const CONCISE_ENVELOPE_INSTRUCTION =
+  `IMPÉRATIF DE BRIÈVETÉ (cause réelle de plusieurs troncatures de production précédentes) : "findings" = AU PLUS 3 phrases courtes (une ligne chacune, jamais un paragraphe). "evidence" = AU PLUS 3 éléments courts (une ligne chacun — pas d'objet détaillé avec justification longue). "uncertainties"/"recommendations" = 0 à 3 éléments courts. Le champ "data" est la seule partie réellement exploitée par le code — ne JAMAIS laisser findings/evidence consommer le budget de sortie au détriment d'un "data" complet et correctement fermé en JSON.`;
+
+/**
+ * CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : plafond de reprise
+ * — largement sous la limite officielle de sortie de claude-haiku-4-5 (64 000
+ * tokens, cf. platform.claude.com/docs/en/models/haiku-4-5/overview, vérifié
+ * le 06/09/2026, §57 jamais un chiffre deviné). Une seule reprise est
+ * tentée (voir callStructuredSpecialist) — jamais une boucle non bornée.
+ */
+const MAX_RETRY_TOKENS = 16_000;
+
 export function extractJson(text: string): unknown {
   const trimmed = text.trim();
   const preview = () => text.slice(0, 2000);
@@ -226,12 +249,57 @@ export async function callStructuredSpecialist<T>(
   system: string,
   userMessage: string,
   dataSchema: z.ZodType<T>,
-  maxTokens = 2000,
+  // CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : défaut relevé de
+  // 2000 à 4000 — plusieurs rôles du catalogue (analyst(), dataAnalyst)
+  // n'ont JAMAIS passé de maxTokens explicite et retombaient donc sur cet
+  // ancien défaut, largement insuffisant même avec la contrainte de
+  // brièveté ci-dessus (CONCISE_ENVELOPE_INSTRUCTION) appliquée. Reste une
+  // marge de sécurité — la protection réelle contre la troncature est
+  // désormais la détection stop_reason + reprise contrôlée ci-dessous,
+  // jamais un chiffre seul.
+  maxTokens = 4000,
   /** PHASE 5 (§"Web Research") : active la recherche web native du provider (ONDEAL_ENABLE_WEB_SEARCH côté anthropic.ts) — jamais activée par défaut pour un rôle qui n'en a pas besoin. */
   webSearch?: { maxUses: number },
 ): Promise<StructuredSpecialistResult<T>> {
   const choice = await chooseModel(taskSetName);
-  const result = await provider.generate({ model: choice.model, system, userMessage, maxTokens, webSearch });
+
+  const attempt = (tokens: number, systemPrompt: string) => provider.generate({ model: choice.model, system: systemPrompt, userMessage, maxTokens: tokens, webSearch });
+
+  let result = await attempt(maxTokens, system);
+  // CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : chaque tentative
+  // (y compris une première tentative tronquée et jetée) consomme des
+  // tokens RÉELS et a un coût RÉEL — jamais silencieusement perdu au profit
+  // du seul décompte de la tentative finale (ce serait un mensonge
+  // d'observabilité, même principe que §22-32 pour servedBy). Agrégées
+  // ci-dessous, jamais fabriquées quand un attempt ne rapporte pas ses
+  // tokens (auquel cas le total redevient honnêtement `null`).
+  const attemptsForTokens: Array<{ tokensIn: number | null; tokensOut: number | null }> = [result];
+
+  // CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle — troncature de la
+  // couche d'exécution des spécialistes, APRÈS le correctif du planner) :
+  // détection DÉFINITIVE de la troncature via le signal RÉEL du provider
+  // (stop_reason/finish_reason normalisé en "max_tokens", provider.ts),
+  // jamais une heuristique déduite du texte reçu après coup (l'ancienne
+  // approche côté extractJson — "fence Markdown jamais refermé" — reste en
+  // place ci-dessous comme FILET DE SÉCURITÉ pour un provider qui ne
+  // rapporterait pas ce signal, mais n'est plus la détection primaire).
+  // Une SEULE reprise contrôlée est tentée — jamais une boucle non bornée,
+  // jamais une réparation du JSON partiel déjà reçu : budget doublé
+  // (plafonné à MAX_RETRY_TOKENS) + rappel explicite de concision.
+  if (result.stopReason === "max_tokens") {
+    const retryTokens = Math.min(maxTokens * 2, MAX_RETRY_TOKENS);
+    const retrySystem = `${system}\n\n${CONCISE_ENVELOPE_INSTRUCTION}\n\nRAPPEL CRITIQUE : ta réponse précédente a été TRONQUÉE par la limite de tokens avant la fin du JSON (confirmé par le provider — stop_reason=max_tokens). Cette fois, réponds de façon NETTEMENT plus concise afin que le JSON complet, correctement fermé, tienne dans le budget alloué (${retryTokens} tokens) — jamais un JSON partiel, jamais une troncature répétée.`;
+    result = await attempt(retryTokens, retrySystem);
+    attemptsForTokens.push(result);
+    if (result.stopReason === "max_tokens") {
+      throw new Error(
+        `Sortie spécialiste tronquée par la limite de tokens (confirmé par le provider — stop_reason=max_tokens) MÊME APRÈS une reprise avec un budget doublé (${retryTokens} tokens) et une consigne de concision explicite — refus (jamais un JSON partiel réparé ou deviné). Texte reçu (2000 premiers caractères) : ${result.text.slice(0, 2000)}`,
+      );
+    }
+  }
+  const totalTokensIn = attemptsForTokens.every((a) => a.tokensIn != null) ? attemptsForTokens.reduce((sum, a) => sum + a.tokensIn!, 0) : null;
+  const totalTokensOut = attemptsForTokens.every((a) => a.tokensOut != null) ? attemptsForTokens.reduce((sum, a) => sum + a.tokensOut!, 0) : null;
+
   // §22-32 : `result.servedBy` n'est renseigné QUE par un composite
   // (FailoverProvider) — il reflète le candidat qui a RÉELLEMENT répondu,
   // qui peut différer de `choice` (chooseModel() ne connaît qu'un seul
@@ -258,22 +326,37 @@ export async function callStructuredSpecialist<T>(
   // `provider.capabilities(actualModel)` résout correctement même quand
   // `provider` est un composite FailoverProvider (il cherche parmi SES
   // candidats le modèle qui correspond à `actualModel`, voir failover.ts).
-  const costUsd = estimateCostUsd(provider, actualModel, result.tokensIn, result.tokensOut);
+  // CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : coût calculé sur
+  // les tokens AGRÉGÉS de toutes les tentatives (totalTokensIn/Out) — jamais
+  // seulement la tentative finale, qui ignorerait le coût bien réel d'une
+  // première tentative tronquée puis jetée.
+  const costUsd = estimateCostUsd(provider, actualModel, totalTokensIn, totalTokensOut);
   return {
     output: { ...envelope.data, data: dataResult.data },
     provider: actualProvider,
     model: actualModel,
     costUsd: costUsd ?? undefined,
-    tokensIn: result.tokensIn,
-    tokensOut: result.tokensOut,
+    tokensIn: totalTokensIn,
+    tokensOut: totalTokensOut,
     citations: result.citations,
     failoverAttempts: result.failoverAttempts,
   };
 }
 
-/** Prompt système générique pour un rôle "analyste" (§6/§21) — un seul task set, paramétré par rôle plutôt que dupliqué N fois. */
+/**
+ * Prompt système générique pour un rôle "analyste" (§6/§21) — un seul task
+ * set, paramétré par rôle plutôt que dupliqué N fois.
+ *
+ * CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : intègre désormais
+ * CONCISE_ENVELOPE_INSTRUCTION — ce prompt (utilisé par 5 des rôles du
+ * catalogue : Brand/UX/CRO/Accessibilité/Performance, catalogue.ts) ne
+ * bornait auparavant AUCUNE longueur pour findings/evidence, contrairement
+ * au planner (déjà corrigé). C'est la cause racine exacte de la 5e panne de
+ * production : le planner produisait des nodes, mais l'exécution de CES
+ * rôles tronquait ensuite au même titre.
+ */
 export function analystSystemPrompt(role: string, focus: string): string {
-  return `Tu es le spécialiste "${role}" d'OnDeal AI (Supervisor, PHASE 4). Analyse le contexte fourni selon cet angle : ${focus}. Réponds STRICTEMENT en JSON : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{}}. "evidence" doit citer des éléments RÉELS du contexte fourni (jamais une généralité sans ancrage). "uncertainties" doit lister explicitement ce qui manque plutôt que d'être vide par complaisance (§15). Aucun dark pattern (§21). Aucun chiffre de conversion inventé (§20/§77).`;
+  return `Tu es le spécialiste "${role}" d'OnDeal AI (Supervisor, PHASE 4). Analyse le contexte fourni selon cet angle : ${focus}. Réponds STRICTEMENT en JSON : {"findings":[...],"evidence":[...],"uncertainties":[...],"recommendations":[...],"confidence":0-1,"data":{}}. "evidence" doit citer des éléments RÉELS du contexte fourni (jamais une généralité sans ancrage). "uncertainties" doit lister explicitement ce qui manque plutôt que d'être vide par complaisance (§15). Aucun dark pattern (§21). Aucun chiffre de conversion inventé (§20/§77).\n${CONCISE_ENVELOPE_INSTRUCTION}`;
 }
 
 export { analysisDataSchema };

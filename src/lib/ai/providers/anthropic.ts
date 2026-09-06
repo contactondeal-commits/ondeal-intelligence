@@ -37,6 +37,15 @@ interface AnthropicContentBlock {
 interface AnthropicResponse {
   content?: AnthropicContentBlock[];
   usage?: { input_tokens?: number; output_tokens?: number };
+  // CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : l'API Anthropic
+  // rapporte TOUJOURS pourquoi la génération s'est arrêtée — "end_turn",
+  // "max_tokens", "stop_sequence", "tool_use" (cf. platform.claude.com/docs/
+  // en/build-with-claude/handling-stop-reasons, vérifié le 06/09/2026).
+  // Jamais lu auparavant par cet adaptateur — la seule façon de savoir qu'une
+  // réponse était tronquée était de le DEVINER après coup sur le texte reçu
+  // (fence Markdown jamais refermé). Capturé ici et reporté tel quel dans
+  // GenerateResult.stopReason (provider.ts).
+  stop_reason?: string | null;
 }
 
 export class AnthropicProvider implements ModelProvider {
@@ -106,6 +115,9 @@ export class AnthropicProvider implements ModelProvider {
       citations: [...citationsByUrl.entries()].map(([url, title]) => ({ url, title })),
       tokensIn: json.usage?.input_tokens ?? null,
       tokensOut: json.usage?.output_tokens ?? null,
+      // Reporté TEL QUEL (Anthropic utilise déjà "max_tokens" comme valeur
+      // littérale — jamais besoin de mapping ici, contrairement à OpenAI).
+      stopReason: json.stop_reason ?? null,
     };
   }
 }

@@ -32,7 +32,7 @@ export function listOpenAiModelIds(): string[] {
 }
 
 interface OpenAiChatResponse {
-  choices?: Array<{ message?: { content?: string } }>;
+  choices?: Array<{ message?: { content?: string }; finish_reason?: string | null }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
@@ -77,11 +77,19 @@ export class OpenAiProvider implements ModelProvider {
 
     const json = (await res.json()) as OpenAiChatResponse;
     const text = json.choices?.[0]?.message?.content ?? "";
+    // CORRECTIF ARCHITECTURAL (06/09/2026, 5e panne réelle) : Chat Completions
+    // rapporte "finish_reason" — "stop"/"length"/"tool_calls"/"content_filter".
+    // "length" == troncature par la limite de tokens, normalisé ici vers la
+    // même valeur littérale "max_tokens" qu'Anthropic (GenerateResult.stopReason,
+    // provider.ts) pour que callStructuredSpecialist (specialists.ts) n'ait
+    // jamais besoin de connaître la convention propre à chaque provider.
+    const finishReason = json.choices?.[0]?.finish_reason ?? null;
     return {
       text,
       citations: [], // Chat Completions ne renvoie pas de citations natives — jamais fabriquées
       tokensIn: json.usage?.prompt_tokens ?? null,
       tokensOut: json.usage?.completion_tokens ?? null,
+      stopReason: finishReason === "length" ? "max_tokens" : finishReason,
     };
   }
 }
